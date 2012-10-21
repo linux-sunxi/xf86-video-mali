@@ -6,15 +6,8 @@
 # copies and copies may only be made to the extent permitted
 # by a licensing agreement from ARM Limited.
 
-SUBDIRS = src
-MAINTAINERCLEANFILES = ChangeLog INSTALL
+Import('x11_env')
 
-.PHONY: ChangeLog INSTALL
+obj = x11_env.SharedObject(Glob('*.c'))
 
-INSTALL:
-	$(INSTALL_CMD)
-
-ChangeLog:
-	$(CHANGELOG_CMD)
-
-dist-hook: ChangeLog INSTALL
+Return('obj')

@@ -25,6 +25,7 @@
 
 //#include <linux/videodev2.h>
 #include <linux/fb.h>
+#include "mali_def.h"
 
 #include "xf86.h"
 #include "exa.h"
@@ -49,6 +50,9 @@ typedef struct {
 	char deviceName[64];
 	Bool use_pageflipping;
 	Bool use_pageflipping_vsync;
+#if UMP_LOCK_ENABLED
+	int fd_umplock;
+#endif
 } MaliRec, *MaliPtr;
 
 typedef struct {

@@ -34,6 +34,7 @@
 #include <fcntl.h>
 #include <linux/fb.h>
 
+#include "xorg-server.h"
 #include "xf86.h"
 #include "xf86cmap.h"
 #include <xf86drm.h>
@@ -62,6 +63,7 @@ static Bool	MaliCloseScreen(int scrnIndex, ScreenPtr pScreen);
 
 static int pix24bpp = 0;
 static int malihwPrivateIndex = -1;
+static int global_drm_fd = -1;
 
 _X_EXPORT DriverRec MALI = {
 	MALI_VERSION,
@@ -97,6 +99,16 @@ static const OptionInfoRec MaliOptions[] = {
 };
 
 #ifdef XFree86LOADER
+
+#ifndef PACKAGE_VERSION_MAJOR
+#define PACKAGE_VERSION_MAJOR 0
+#endif
+#ifndef PACKAGE_VERSION_MINOR
+#define PACKAGE_VERSION_MINOR 1
+#endif
+#ifndef PACKAGE_VERSION_PATCHLEVEL
+#define PACKAGE_VERSION_PATCHLEVEL 1
+#endif
 
 MODULESETUPPROTO(MaliSetup);
 
@@ -226,7 +238,14 @@ static Bool fbdev_crtc_config_resize( ScrnInfoPtr pScrn, int width, int height )
 	pScrn->virtualY = height;
 
 	/* update pitch setting in EXA */
-	(*pScrn->pScreen->GetScreenPixmap)(pScrn->pScreen)->devKind = pitch;
+#if 0
+	PixmapPtr frontPixmap = (*pScrn->pScreen->GetScreenPixmap)(pScrn->pScreen);
+	PixmapPtr backPixmap  = ((PrivPixmap *)exaGetPixmapDriverPrivate(frontPixmap))->other_buffer;
+	
+	backPixmap->devKind = frontPixmap->devKind = pitch;
+	backPixmap->drawable.width = frontPixmap->drawable.width = width;
+	backPixmap->drawable.height = frontPixmap->drawable.width = height;
+#endif
 	pScrn->displayWidth = pitch / (pScrn->bitsPerPixel/8);
 
 	/* reinitialize the crtc to get the new setting */
@@ -861,12 +880,17 @@ static Bool mali_drm_open_master( ScrnInfoPtr pScrn )
 	drmSetVersion sv;
 	int err;
 
-	fPtr->drm_fd = drmOpen("mali_drm", NULL );
-	if ( fPtr->drm_fd == -1 )
+	if (global_drm_fd == -1)
 	{
-		xf86DrvMsg( pScrn->scrnIndex, X_ERROR, "%s Unable to open DRM: %s\n", __func__, strerror(errno));
-		return FALSE;
+		global_drm_fd = drmOpen("mali_drm", NULL);
+		if (global_drm_fd == -1)
+		{
+			xf86DrvMsg( pScrn->scrnIndex, X_ERROR, "%s Unable to open DRM: %s\n", __func__, strerror(errno));
+			return FALSE;
+		}
 	}
+
+	fPtr->drm_fd = global_drm_fd;
 	xf86DrvMsg( pScrn->scrnIndex, X_ERROR, "%s DRM OPEN (fd: 0x%x)\n", __func__, fPtr->drm_fd );
 
 	sv.drm_di_major = 1;
@@ -1146,7 +1170,7 @@ static Bool MaliScreenInit(int scrnIndex, ScreenPtr pScreen, int argc, char **ar
 	xf86LoadSubModule(pScrn, "exa");
 	fPtr->exa = exaDriverAlloc();
 
-	if ( maliSetupExa( pScreen, fPtr->exa, pScrn->virtualX, pScrn->virtualY, fPtr->fbmem ) )
+	if ( maliSetupExa( pScreen, fPtr->exa ) )
 	{
 		xf86DrvMsg(pScrn->scrnIndex, X_WARNING, "Initializing EXA Driver!\n");
 		exaDriverInit( pScreen, fPtr->exa );
@@ -1199,6 +1223,19 @@ static Bool MaliScreenInit(int scrnIndex, ScreenPtr pScreen, int argc, char **ar
 		if (n) xf86XVScreenInit(pScreen,ptr,n);
 	}
 
+#if UMP_LOCK_ENABLED
+	fPtr->fd_umplock = open("/dev/umplock", O_RDWR);
+	if ( -1 == fPtr->fd_umplock )
+	{
+		xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "Failed to open umplock device!\n" );
+		fPtr->fd_umplock = 0;
+	}
+	else
+	{
+		xf86DrvMsg( pScrn->scrnIndex, X_INFO, "Opened umplock device!\n" );
+	}
+#endif /* UMP_LOCK_ENABLED */
+
 	return TRUE;
 }
 
@@ -1224,6 +1261,13 @@ static Bool MaliCloseScreen(int scrnIndex, ScreenPtr pScreen)
 		MaliDRI2CloseScreen( pScreen );
 		mali_drm_close_master( pScrn );
 	}
+#if UMP_LOCK_ENABLED
+	if ( fPtr->fd_umplock )
+	{
+		close( fPtr->fd_umplock );
+		fPtr->fd_umplock = 0;
+	}
+#endif /* UMP_LOCK_ENABLED */
 
 	return TRUE;
 }

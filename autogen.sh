@@ -6,15 +6,15 @@
 # copies and copies may only be made to the extent permitted
 # by a licensing agreement from ARM Limited.
 
-SUBDIRS = src
-MAINTAINERCLEANFILES = ChangeLog INSTALL
+#! /bin/sh
 
-.PHONY: ChangeLog INSTALL
+srcdir=`dirname $0`
+test -z "$srcdir" && srcdir=.
 
-INSTALL:
-	$(INSTALL_CMD)
+ORIGDIR=`pwd`
+cd $srcdir
 
-ChangeLog:
-	$(CHANGELOG_CMD)
+autoreconf -v --install || exit 1
+cd $ORIGDIR || exit $?
 
-dist-hook: ChangeLog INSTALL
+$srcdir/configure --enable-maintainer-mode "$@"

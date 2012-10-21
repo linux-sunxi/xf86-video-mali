@@ -20,6 +20,10 @@
  * THE SOFTWARE.
  */
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
@@ -30,34 +34,45 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+#include "xorgVersion.h"
 #include "xf86.h"
 #include "xf86drm.h"
 #include "dri2.h"
-
+#include "damage.h"
 #include "mali_def.h"
 #include "mali_fbdev.h"
 #include "mali_exa.h"
 #include "mali_dri.h"
-
-#define  FBIO_WAITFORVSYNC    _IOW('F', 0x20, __u32)
+#include "damage.h"
 
 typedef struct
 {
 	PixmapPtr pPixmap;
-	unsigned int attachment;
 	Bool isPageFlipped;
+	Bool has_bb_reference;
 } MaliDRI2BufferPrivateRec, *MaliDRI2BufferPrivatePtr;
 
 static DRI2Buffer2Ptr MaliDRI2CreateBuffer( DrawablePtr pDraw, unsigned int attachment, unsigned int format )
 {
 	ScreenPtr pScreen = pDraw->pScreen;
-	DRI2Buffer2Ptr buffer;
-	MaliDRI2BufferPrivatePtr privates;
-	PixmapPtr pPixmap;
-	PrivPixmap *privPixmap;
 	ScrnInfoPtr pScrn = xf86Screens[pScreen->myNum];
 	MaliPtr fPtr = MALIPTR(pScrn);
-	
+
+	DRI2Buffer2Ptr buffer;
+	MaliDRI2BufferPrivatePtr privates;
+	PixmapPtr pPixmapToWrap = NULL;
+	PrivPixmap *privPixmapToWrap;
+
+	PixmapPtr pWindowPixmap = NULL;
+	PrivPixmap *privWindowPixmap = NULL;
+	if ( pDraw->type == DRAWABLE_WINDOW )
+	{
+		pWindowPixmap = pScreen->GetWindowPixmap( (WindowPtr) pDraw );
+		privWindowPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate( pWindowPixmap );
+	}
+
+	// xf86DrvMsg( pScrn->scrnIndex, X_INFO, "Creating attachment %u around drawable %p (window pixmap %p)\n", attachment, pDraw, pScreen->GetWindowPixmap((WindowPtr)pDraw));
+
 	buffer = calloc(1, sizeof *buffer);
 	if ( NULL == buffer ) return NULL;
 
@@ -70,8 +85,8 @@ static DRI2Buffer2Ptr MaliDRI2CreateBuffer( DrawablePtr pDraw, unsigned int atta
 
 	/* initialize privates info to default values */
 	privates->pPixmap = NULL;
-	privates->attachment = attachment;
 	privates->isPageFlipped = FALSE;
+	privates->has_bb_reference = FALSE;
 
 	/* initialize buffer info to default values */
 	buffer->attachment = attachment;
@@ -79,95 +94,43 @@ static DRI2Buffer2Ptr MaliDRI2CreateBuffer( DrawablePtr pDraw, unsigned int atta
 	buffer->format = format;
 	buffer->flags = 0;
 
-	if ( DRI2CanFlip( pDraw ) && fPtr->use_pageflipping && DRAWABLE_PIXMAP != pDraw->type)
+	if ( DRI2CanFlip( pDraw ) && fPtr->use_pageflipping && DRAWABLE_WINDOW == pDraw->type )
 	{
-		ump_secure_id ump_id = UMP_INVALID_SECURE_ID;
+		assert(privWindowPixmap->other_buffer != NULL);
 
-		if ( (fPtr->fb_lcd_var.yres*2) > fPtr->fb_lcd_var.yres_virtual )
+		if ( DRI2BufferFrontLeft == attachment || DRI2BufferFakeFrontLeft == attachment)
 		{
-			xf86DrvMsg( pScrn->scrnIndex, X_ERROR, "[%s:%d] lcd driver does not have enough virtual y resolution. Need: %i Have: %i\n", 
-			            __FUNCTION__, __LINE__, fPtr->fb_lcd_var.yres*2, fPtr->fb_lcd_var.yres_virtual );
-			return NULL;
+			pPixmapToWrap = pWindowPixmap;
 		}
-
-		(void)ioctl(fPtr->fb_lcd_fd, GET_UMP_SECURE_ID, &ump_id );
-
-		if ( UMP_INVALID_SECURE_ID == ump_id )
+		else if ( DRI2BufferBackLeft == attachment )
 		{
-			xf86DrvMsg( pScrn->scrnIndex, X_ERROR, "[%s:%d] failed to retrieve UMP memory handle for flipping\n", __FUNCTION__, __LINE__ );
-
-			free( buffer );
-			free( privates );
-			return NULL;
+			PixmapPtr tempPixmap = privWindowPixmap->other_buffer;
+			pPixmapToWrap = tempPixmap;
 		}
-
-		buffer->name = ump_id;
-
-		if ( DRI2BufferBackLeft == attachment )
-		{
-			/* Use the "flags" attribute in order to provide EGL with enough information to offset the provided UMP memory for this buffer
-			 * Flags will only be set in cases where it is possible to do page flipping instead of offscreen rendering with EXA copy
-			 * Offset is set to the second virtual screen, in y direction
-			 * Example: 
-			 * Physical resolution: 1366 x 768 
-			 * Virtual resolution:  1366 x 1536
-			 * Offset: 768
-			 */
-			buffer->flags = (fPtr->fb_lcd_var.xres_virtual * fPtr->fb_lcd_var.bits_per_pixel/8) * fPtr->fb_lcd_var.yres;
-		}
-
-		if ( ioctl( fPtr->fb_lcd_fd, FBIOGET_VSCREENINFO, &fPtr->fb_lcd_var ) < 0 )
-		{
-			xf86DrvMsg( pScrn->scrnIndex, X_ERROR, "[%s:%d] failed in FBIOGET_VSCREENINFO\n", __FUNCTION__, __LINE__ );
-			free( buffer ),
-			free( privates );
-			TRACE_EXIT();
-			return NULL;
-		}
-
-		fPtr->fb_lcd_var.yoffset = fPtr->fb_lcd_var.yres;
-		fPtr->fb_lcd_var.activate = FB_ACTIVATE_NOW;
-
-		if ( ioctl( fPtr->fb_lcd_fd, FBIOPUT_VSCREENINFO, &fPtr->fb_lcd_var ) < 0 )
-		{
-			xf86DrvMsg( pScrn->scrnIndex, X_ERROR, "[%s:%d] failed in FBIOPUT_VSCREENINFO\n", __FUNCTION__, __LINE__ );
-			free( buffer );
-			free( privates );
-			return NULL;
-		}
-
-		if ( DRAWABLE_PIXMAP == pDraw->type ) pPixmap = (PixmapPtr)pDraw;
-		else pPixmap = pScreen->GetWindowPixmap( (WindowPtr) pDraw );
-
 		privates->isPageFlipped = TRUE;
-
-		pPixmap->refcnt++;
-
-		buffer->pitch = pPixmap->devKind;
-		if ( 0 == buffer->pitch )
-		{
-			xf86DrvMsg( pScrn->scrnIndex, X_ERROR, "[%s:%d] Warning: Autocalculating pitch\n", __FUNCTION__, __LINE__ );
-			buffer->pitch = ( (pPixmap->drawable.width*pPixmap->drawable.bitsPerPixel) + 7 ) / 8;
-		}
-		buffer->cpp = pPixmap->drawable.bitsPerPixel / 8;
-		xf86DrvMsg( pScrn->scrnIndex, X_ERROR, "[%s:%d] Enabled Page Flipping (pitch: %i flags: %i width: %i height: %i)\n", __FUNCTION__, __LINE__, buffer->pitch, buffer->flags, pPixmap->drawable.width, pPixmap->drawable.height );
-
-		ioctl( fPtr->fb_lcd_fd, FBIOGET_VSCREENINFO, &fPtr->fb_lcd_var );
 	}
-	else
+
+	/* Either the surface isn't swappable or the framebuffer back buffer is already in use */
+	if ( pPixmapToWrap == NULL )
 	{
 		if ( DRI2BufferFrontLeft == attachment )
 		{
-			if ( DRAWABLE_PIXMAP == pDraw->type ) pPixmap = (PixmapPtr)pDraw;
-			else pPixmap = pScreen->GetWindowPixmap( (WindowPtr) pDraw );
+			if ( DRAWABLE_PIXMAP == pDraw->type )
+			{
+				pPixmapToWrap = (PixmapPtr)pDraw;
+			}
+			else
+			{
+				pPixmapToWrap = pScreen->GetWindowPixmap( (WindowPtr) pDraw );
+			}
 
-			pPixmap->refcnt++;
+			privPixmapToWrap = (PrivPixmap *)exaGetPixmapDriverPrivate( pPixmapToWrap );
 		}
 		else
 		{
-			/* create a new pixmap for the offscreen data */
-			pPixmap = (*pScreen->CreatePixmap)( pScreen, pDraw->width, pDraw->height, (format != 0) ? format : pDraw->depth, 0 );
-			if ( NULL == pPixmap )
+			/* Create a new pixmap for the offscreen data */
+			pPixmapToWrap = (*pScreen->CreatePixmap)( pScreen, pDraw->width, pDraw->height, (format != 0) ? format : pDraw->depth, 0 );
+			if ( NULL == pPixmapToWrap )
 			{
 				xf86DrvMsg( pScrn->scrnIndex, X_ERROR, "[%s:%d] unable to allocate pixmap\n", __FUNCTION__, __LINE__ );
 				free( buffer );
@@ -175,25 +138,28 @@ static DRI2Buffer2Ptr MaliDRI2CreateBuffer( DrawablePtr pDraw, unsigned int atta
 				return NULL;
 			}
 
-			exaMoveInPixmap(pPixmap);
+			/* This is the only case where we don't need to add an additional reference to the pixmap, so
+			 * drop one here to negate the increase at the end of the function */
+			pPixmapToWrap->refcnt--;
+
+			exaMoveInPixmap(pPixmapToWrap);
 		}
-
-		privates->pPixmap = pPixmap;
-		privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate( pPixmap );
-
-		if (!privPixmap->isFrameBuffer)
-			privPixmap->gpu_access = TRUE;
-	
-		/* if no CPU access the memory before dri2GetBuffers, no need to sync the CPU cache */
-		if ( privPixmap->addr )
-		{
-			ump_cpu_msync_now( privPixmap->mem_info->handle, UMP_MSYNC_CLEAN, (void *)privPixmap->addr, privPixmap->mem_info->usize );
-		}
-
-		buffer->pitch = pPixmap->devKind;
-		buffer->cpp = pPixmap->drawable.bitsPerPixel / 8;
-		buffer->name = ump_secure_id_get( privPixmap->mem_info->handle );
 	}
+
+	privates->pPixmap = pPixmapToWrap;
+	privPixmapToWrap = (PrivPixmap *)exaGetPixmapDriverPrivate( pPixmapToWrap );
+
+	buffer->cpp = pPixmapToWrap->drawable.bitsPerPixel / 8;
+	buffer->name = ump_secure_id_get( privPixmapToWrap->mem_info->handle );
+	buffer->flags = privPixmapToWrap->mem_info->offset;
+	buffer->pitch = pPixmapToWrap->devKind;
+	if ( 0 == buffer->pitch )
+	{
+		xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "[%s:%d] Warning: Autocalculating pitch\n", __FUNCTION__, __LINE__ );
+		buffer->pitch = ( (pPixmapToWrap->drawable.width * pPixmapToWrap->drawable.bitsPerPixel) + 7 ) / 8;
+	}
+
+	pPixmapToWrap->refcnt++;
 
 	return buffer;
 }
@@ -202,31 +168,16 @@ static void MaliDRI2DestroyBuffer( DrawablePtr pDraw, DRI2Buffer2Ptr buffer )
 {
 	ScreenPtr pScreen = pDraw->pScreen;
 	ScrnInfoPtr pScrn = xf86Screens[pScreen->myNum];
-	MaliPtr fPtr = MALIPTR(pScrn);
+
+	//xf86DrvMsg( pScrn->scrnIndex, X_INFO, "Destroying attachment %d for drawable %p\n", buffer->attachment, pDraw);
 
 	if ( NULL != buffer )
 	{
 		MaliDRI2BufferPrivatePtr private = buffer->driverPrivate;
-		ScreenPtr pScreen = pDraw->pScreen;
 
-		if ( NULL != private )
+		if( NULL != private && NULL != private->pPixmap )
 		{
-			if ( TRUE == private->isPageFlipped )
-			{
-				if ( ioctl( fPtr->fb_lcd_fd, FBIOGET_VSCREENINFO, &fPtr->fb_lcd_var ) < 0 )
-				{
-					xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "[%s:%d] failed in FBIOGET_VSCREENINFO\n", __FUNCTION__, __LINE__ );
-				}
-
-				fPtr->fb_lcd_var.yoffset = 0;
-				fPtr->fb_lcd_var.activate = FB_ACTIVATE_NOW;
-
-				if ( ioctl( fPtr->fb_lcd_fd, FBIOPUT_VSCREENINFO, &fPtr->fb_lcd_var ) < 0 )
-				{
-					xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "[%s:%d] failed in FBIOPUT_VSCREENINFO\n", __FUNCTION__, __LINE__ );
-				}
-			}
-			if( NULL != private->pPixmap ) (*pScreen->DestroyPixmap)(private->pPixmap);
+			(*pScreen->DestroyPixmap)(private->pPixmap);
 		}
 
 		free( private );
@@ -234,59 +185,266 @@ static void MaliDRI2DestroyBuffer( DrawablePtr pDraw, DRI2Buffer2Ptr buffer )
 	}
 }
 
+static int wt_set_window_pixmap(WindowPtr win, pointer data)
+{
+	ScreenPtr pScreen = ((DrawablePtr)win)->pScreen;
+
+	/* We only want to update the window pixmap for non-redirected windows. Otherwise redirected windows will end up
+	 * drawing to the front buffer. */
+	if (win && win->redirectDraw == RedirectDrawNone)
+	{
+		pScreen->SetWindowPixmap(win, (PixmapPtr)data);
+		return WT_WALKCHILDREN;
+	}
+	else
+	{
+		/* Don't walk the children of a redirected window as they won't be marked as redirected but as their
+		 * parent is they will be too. If we continue to walk to them they will end up drawing to the front
+		 * buffer. */
+		return WT_DONTWALKCHILDREN;
+	}
+}
+
+DrawablePtr dri2_get_drawable( DrawablePtr pDraw, DRI2BufferPtr buffer )
+{
+	DrawablePtr drawable = NULL;
+
+	if ( DRI2BufferFrontLeft == buffer->attachment )
+	{
+		drawable = pDraw;
+	}
+	else
+	{
+		MaliDRI2BufferPrivatePtr private = buffer->driverPrivate;
+		drawable = &private->pPixmap->drawable;
+	}
+
+	return drawable;
+}
+
+PixmapPtr dri2_get_drawable_pixmap( DrawablePtr pDraw )
+{
+	PixmapPtr pix = NULL;
+
+	if ( !pDraw ) return NULL;
+
+	if ( DRAWABLE_WINDOW == pDraw->type )
+	{
+		pix = pDraw->pScreen->GetWindowPixmap( (WindowPtr)pDraw );
+	} 
+	else
+	{
+		pix = (PixmapPtr)pDraw;
+	}
+
+	return pix;
+}
+
+static int exchange_buffers(DrawablePtr pDraw, DRI2BufferPtr front, DRI2BufferPtr back, int dri2_complete_cmd )
+{
+	DrawablePtr front_drawable;
+	DrawablePtr back_drawable;
+	PixmapPtr front_pixmap;
+	PixmapPtr back_pixmap;
+	PrivPixmap *front_privPixmap = NULL;
+	PrivPixmap *back_privPixmap = NULL;
+	Bool exchange_mem_info = FALSE;
+	Bool both_framebuffer = FALSE;
+	Bool one_framebuffer = FALSE;
+
+	front_drawable = dri2_get_drawable( pDraw, front );
+	back_drawable = dri2_get_drawable( pDraw, back );
+
+	front_pixmap = dri2_get_drawable_pixmap( front_drawable );
+	back_pixmap = dri2_get_drawable_pixmap( back_drawable );
+
+	front_privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate( front_pixmap );
+	back_privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate( back_pixmap );
+
+	exchange( front->name, back->name );
+
+	/* exchange the private memory info if
+	 * 1. it is a swap between non-framebuffers
+	 * exchange the driverPrivate info if
+	 * 1. it is a flip between the framebuffers
+	 */
+	both_framebuffer = (front_privPixmap->isFrameBuffer && back_privPixmap->isFrameBuffer);
+	one_framebuffer = (front_privPixmap->isFrameBuffer || back_privPixmap->isFrameBuffer);
+	
+	if ( both_framebuffer ) exchange_mem_info = FALSE;
+	else if ( !one_framebuffer && dri2_complete_cmd == DRI2_EXCHANGE_COMPLETE ) exchange_mem_info = TRUE;
+
+	if ( exchange_mem_info ) 
+	{
+	//	ErrorF("EXCHANGING UMP ID 0x%x with 0x%x (%s)\n", ump_secure_id_get(front_privPixmap->mem_info->handle), ump_secure_id_get(back_privPixmap->mem_info->handle), dri2_complete_cmd == DRI2_EXCHANGE_COMPLETE ? "SWAP" : "FLIP" );
+		exchange( front_privPixmap->mem_info, back_privPixmap->mem_info );
+	}
+	else if(both_framebuffer)
+	{
+		exchange (front->driverPrivate, back->driverPrivate);
+	}
+}
+
+static void platform_wait_for_vsync(ScrnInfoPtr pScrn, int fb_lcd_fd)
+{
+#if PLATFORM_ORION
+	int interrupt = 1;
+	if ( ioctl( fb_lcd_fd, S3CFB_SET_VSYNC_INT, &interrupt ) < 0 )
+	{
+		xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "[%s:%d] failed in S3CFB_SET_VSYNC_INT\n", __FUNCTION__, __LINE__ );
+	}
+
+	if ( ioctl( fb_lcd_fd, FBIO_WAITFORVSYNC, 0 ) < 0 )
+	{
+		xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "[%s:%d] failed in FBIO_WAITFORVSYNC\n", __FUNCTION__, __LINE__ );
+	}
+
+	interrupt = 0;
+	if ( ioctl( fb_lcd_fd, S3CFB_SET_VSYNC_INT, &interrupt ) < 0 )
+	{
+		xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "[%s:%d] failed in S3CFB_SET_VSYNC_INT\n", __FUNCTION__, __LINE__ );
+	}
+#endif
+}
+
 static void MaliDRI2CopyRegion( DrawablePtr pDraw, RegionPtr pRegion, DRI2BufferPtr pDstBuffer, DRI2BufferPtr pSrcBuffer )
 {
 	GCPtr pGC;
 	RegionPtr copyRegion;
 	ScreenPtr pScreen = pDraw->pScreen;
-	MaliDRI2BufferPrivatePtr srcPrivate = pSrcBuffer->driverPrivate;
-	MaliDRI2BufferPrivatePtr dstPrivate = pDstBuffer->driverPrivate;
-	DrawablePtr src = (srcPrivate->attachment == DRI2BufferFrontLeft) ? pDraw : &srcPrivate->pPixmap->drawable;
-	DrawablePtr dst = (dstPrivate->attachment == DRI2BufferFrontLeft) ? pDraw : &dstPrivate->pPixmap->drawable;
 	ScrnInfoPtr pScrn = xf86Screens[pScreen->myNum];
 	MaliPtr fPtr = MALIPTR(pScrn);
+	PixmapPtr winPixmap;
 
-	if ( TRUE == dstPrivate->isPageFlipped && TRUE == srcPrivate->isPageFlipped )
+	MaliDRI2BufferPrivatePtr srcPrivate = pSrcBuffer->driverPrivate;
+	MaliDRI2BufferPrivatePtr dstPrivate = pDstBuffer->driverPrivate;
+
+	PixmapPtr srcPixmap = srcPrivate->pPixmap;
+	PixmapPtr dstPixmap = dstPrivate->pPixmap;
+
+	DrawablePtr srcDrawable = &srcPrivate->pPixmap->drawable;
+	DrawablePtr dstDrawable = pDraw;
+
+	//ErrorF("blit................\n");
+
+	pGC = GetScratchGC(pDraw->depth, pScreen);
+	copyRegion = REGION_CREATE( pScreen, NULL, 0 );
+	REGION_COPY( pScreen, copyRegion, pRegion );
+	(*pGC->funcs->ChangeClip)(pGC, CT_REGION, copyRegion, 0 );
+	ValidateGC( dstDrawable, pGC );
+	(*pGC->ops->CopyArea)( srcDrawable, dstDrawable, pGC, 0, 0, pDraw->width, pDraw->height, 0, 0 );
+	FreeScratchGC(pGC);
+}
+
+/*
+ * MaliDRI2ScheduleSwap is the implementation of DRI2SwapBuffers, this function
+ * should wait for vblank event which will trigger registered event handler. 
+ * Event handler will do FLIP/SWAP/BLIT according to event type.
+ *
+ * TODO: current DRM doesn't support vblank well, so this function just do FLIP/
+ *       SWAP/BLIT directly, according to drawable information.
+ */
+static int MaliDRI2ScheduleSwap(ClientPtr client, DrawablePtr pDraw, DRI2BufferPtr front,
+								DRI2BufferPtr back, CARD64 *target_msc, CARD64 divisor,
+								CARD64 remainder, DRI2SwapEventPtr func, void *data)
+{
+	ScreenPtr pScreen = pDraw->pScreen;
+	ScrnInfoPtr pScrn = xf86Screens[pScreen->myNum];
+	MaliPtr fPtr = MALIPTR(pScrn);
+	BoxRec box;
+	RegionRec region;
+	void *tmp;
+	int dri2_complete_cmd = DRI2_BLIT_COMPLETE;
+
+	MaliDRI2BufferPrivatePtr front_priv = front->driverPrivate;
+	MaliDRI2BufferPrivatePtr back_priv  = back->driverPrivate;
+
+	PixmapPtr front_pixmap = front_priv->pPixmap;
+	PixmapPtr back_pixmap  = back_priv->pPixmap;
+	assert(front_pixmap != NULL);
+	assert(back_pixmap  != NULL);
+
+	PrivPixmap *front_pixmap_priv = (PrivPixmap *)exaGetPixmapDriverPrivate(front_pixmap);
+	PrivPixmap *back_pixmap_priv  = (PrivPixmap *)exaGetPixmapDriverPrivate(back_pixmap);
+
+	if (DRI2CanFlip(pDraw) && fPtr->use_pageflipping && DRAWABLE_WINDOW == pDraw->type && front_priv->isPageFlipped)
 	{
-		fPtr->fb_lcd_var.yoffset = (fPtr->fb_lcd_var.yoffset + fPtr->fb_lcd_var.yres) % (fPtr->fb_lcd_var.yres*2);
 
+		unsigned int line_length = fPtr->fb_lcd_var.xres * fPtr->fb_lcd_var.bits_per_pixel / 8;
+		fPtr->fb_lcd_var.yoffset = back_pixmap_priv->mem_info->offset / line_length;
+		//ErrorF("flip................ ofs %i\n", fPtr->fb_lcd_var.yoffset);
 
-#if 1
-		if ( ioctl( fPtr->fb_lcd_fd, FBIOPUT_VSCREENINFO, &fPtr->fb_lcd_var ) < 0 )
+		if ( ioctl( fPtr->fb_lcd_fd, FBIOPAN_DISPLAY, &fPtr->fb_lcd_var ) == -1 )
 		{
-			xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "[%s:%d] failed in FBIOPUT_VSCREENINFO (offset: %i)\n", __FUNCTION__, __LINE__, fPtr->fb_lcd_var.yoffset );
+			xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "[%s:%d] failed in FBIOPAN_DISPLAY\n", __FUNCTION__, __LINE__ );
 		}
 
 		if ( fPtr->use_pageflipping_vsync )
 		{
-			fPtr->fb_lcd_var.activate = FB_ACTIVATE_VBL;
-			if ( ioctl( fPtr->fb_lcd_fd, FBIO_WAITFORVSYNC, 0 ) < 0 )
-			{
-				xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "[%s:%d] failed in FBIO_WAITFORVSYNC\n", __FUNCTION__, __LINE__ );
-			}
+			platform_wait_for_vsync(pScrn, fPtr->fb_lcd_fd);
 		}
-#else
-		if ( ioctl( fPtr->fb_lcd_fd, FBIOPAN_DISPLAY, &fPtr->fb_lcd_var ) < 0 )
-		{
-			xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "[%s:%d] failed in FBIOPAN_DISPLAY (offset: %i)\n", __FUNCTION__, __LINE__, fPtr->fb_lcd_var.yoffset );
-		}
-#endif
+
 		ioctl( fPtr->fb_lcd_fd, FBIOGET_VSCREENINFO, &fPtr->fb_lcd_var );
 
-		return;
+		dri2_complete_cmd = DRI2_FLIP_COMPLETE;
+		exchange_buffers(pDraw, front, back, dri2_complete_cmd);
+
+		/* Tell the X server that all 2D rendering should be done to newPixmap from now on */
+#if XORG_VERSION_CURRENT < XORG_VERSION_NUMERIC(1, 9, 4, 901, 0)
+		pScreen->SourceValidate(pDraw, 0, 0, pDraw->width, pDraw->height);
+#else
+		pScreen->SourceValidate(pDraw, 0, 0, pDraw->width, pDraw->height, IncludeInferiors);
+#endif
+
+		pScreen->SetScreenPixmap(back_pixmap);
+
+		/* Update all windows so that their front buffer is now the other half of the fbdev */
+		WalkTree(pScreen, wt_set_window_pixmap, back_pixmap);
+
+		
+	}
+	else if(front_pixmap->drawable.width        == back_pixmap->drawable.width   &&
+			front_pixmap->drawable.height       == back_pixmap->drawable.height  &&
+			front_pixmap->drawable.bitsPerPixel == back_pixmap->drawable.bitsPerPixel) 
+	{
+		PixmapPtr dst_pix = dri2_get_drawable_pixmap( dri2_get_drawable( pDraw, front ) );
+			
+		dri2_complete_cmd = DRI2_EXCHANGE_COMPLETE;
+		exchange_buffers(pDraw, front, back, dri2_complete_cmd);
+		//ErrorF("swap................  %i\n");
+		box.x1 = 0;
+		box.y1 = 0;
+		box.x2 = pDraw->width;
+		box.y2 = pDraw->height;
+		REGION_INIT(pScreen, &region, &box, 0);
+		
+		/* TODO: not sure if doing the translate is correct for a non-composite scenario */
+		RegionTranslate( &region, dst_pix->screen_x, dst_pix->screen_y );
+
+		DamageDamageRegion(pDraw, &region);
+
+		front_pixmap->drawable.serialNumber = NEXT_SERIAL_NUMBER ;
+		back_pixmap->drawable.serialNumber = NEXT_SERIAL_NUMBER ;
+	}
+	else
+	{
+		box.x1 = 0;
+		box.y1 = 0;
+		box.x2 = pDraw->width;
+		box.y2 = pDraw->height;
+		REGION_INIT(pScreen, &region, &box, 0);
+		
+		MaliDRI2CopyRegion(pDraw, &region, front, back);
+		dri2_complete_cmd = DRI2_BLIT_COMPLETE;
 	}
 
-	if ( DRI2BufferFakeFrontLeft == srcPrivate->attachment || DRI2BufferFakeFrontLeft == dstPrivate->attachment ) return;
+	DRI2SwapComplete(client, pDraw, 0, 0, 0, dri2_complete_cmd, func, data);
 
-	pGC = GetScratchGC(pDraw->depth, pScreen);
+	/* Adjust returned value */
+	*target_msc += 1;
 
-	copyRegion = REGION_CREATE( pScreen, NULL, 0 );
-	REGION_COPY( pScreen, copyRegion, pRegion );
-	(*pGC->funcs->ChangeClip)(pGC, CT_REGION, copyRegion, 0 );
-	ValidateGC( dst, pGC );
-	(*pGC->ops->CopyArea)( src, dst, pGC, 0, 0, pDraw->width, pDraw->height, 0, 0 );
 
-	FreeScratchGC(pGC);
+	return TRUE;
 }
 
 Bool MaliDRI2ScreenInit( ScreenPtr pScreen )
@@ -298,6 +456,9 @@ Bool MaliDRI2ScreenInit( ScreenPtr pScreen )
 	struct stat sbuf;
 	dev_t d;
 	char *p;
+#if DRI2INFOREC_VERSION >= 4
+	const char *driverNames[1];
+#endif
 
 	if ( xf86LoaderCheckSymbol( "DRI2Version") ) DRI2Version( &dri2_major, &dri2_minor );
 
@@ -347,6 +508,19 @@ Bool MaliDRI2ScreenInit( ScreenPtr pScreen )
 #endif
 
 	info.CopyRegion = MaliDRI2CopyRegion;
+
+#if DRI2INFOREC_VERSION >= 4
+	if (fPtr->use_pageflipping)
+	{
+		info.version = 4;
+		info.ScheduleSwap = MaliDRI2ScheduleSwap;
+		info.GetMSC = NULL;
+		info.ScheduleWaitMSC = NULL;
+		info.numDrivers = 1;
+		info.driverNames = driverNames;
+		driverNames[0] = info.driverName;
+	}
+#endif
 
 	if ( FALSE == DRI2ScreenInit( pScreen, &info ) ) return FALSE;
 
