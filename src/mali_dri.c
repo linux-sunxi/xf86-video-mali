@@ -96,7 +96,7 @@ static DRI2Buffer2Ptr MaliDRI2CreateBuffer( DrawablePtr pDraw, unsigned int atta
 
 	if ( DRI2CanFlip( pDraw ) && fPtr->use_pageflipping && DRAWABLE_WINDOW == pDraw->type )
 	{
-		assert(privWindowPixmap->priv->other_buffer != NULL);
+		assert(privWindowPixmap->other_buffer != NULL);
 
 		if ( DRI2BufferFrontLeft == attachment || DRI2BufferFakeFrontLeft == attachment)
 		{
@@ -104,7 +104,7 @@ static DRI2Buffer2Ptr MaliDRI2CreateBuffer( DrawablePtr pDraw, unsigned int atta
 		}
 		else if ( DRI2BufferBackLeft == attachment )
 		{
-			PixmapPtr tempPixmap = privWindowPixmap->priv->other_buffer;
+			PixmapPtr tempPixmap = privWindowPixmap->other_buffer;
 			pPixmapToWrap = tempPixmap;
 		}
 		privates->isPageFlipped = TRUE;
@@ -150,8 +150,8 @@ static DRI2Buffer2Ptr MaliDRI2CreateBuffer( DrawablePtr pDraw, unsigned int atta
 	privPixmapToWrap = (PrivPixmap *)exaGetPixmapDriverPrivate( pPixmapToWrap );
 
 	buffer->cpp = pPixmapToWrap->drawable.bitsPerPixel / 8;
-	buffer->name = ump_secure_id_get( privPixmapToWrap->priv->mem_info->handle );
-	buffer->flags = privPixmapToWrap->priv->mem_info->offset;
+	buffer->name = ump_secure_id_get( privPixmapToWrap->mem_info->handle );
+	buffer->flags = privPixmapToWrap->mem_info->offset;
 	buffer->pitch = pPixmapToWrap->devKind;
 	if ( 0 == buffer->pitch )
 	{
@@ -246,8 +246,8 @@ static int exchange_buffers(DrawablePtr pDraw, DRI2BufferPtr front, DRI2BufferPt
 	DrawablePtr back_drawable;
 	PixmapPtr front_pixmap;
 	PixmapPtr back_pixmap;
-	PrivPixmap *front_privPixmap_wrapper = NULL;
-	PrivPixmap *back_privPixmap_wrapper = NULL;
+	PrivPixmap *front_privPixmap = NULL;
+	PrivPixmap *back_privPixmap = NULL;
 	Bool exchange_mem_info = FALSE;
 	Bool both_framebuffer = FALSE;
 	Bool one_framebuffer = FALSE;
@@ -258,8 +258,8 @@ static int exchange_buffers(DrawablePtr pDraw, DRI2BufferPtr front, DRI2BufferPt
 	front_pixmap = dri2_get_drawable_pixmap( front_drawable );
 	back_pixmap = dri2_get_drawable_pixmap( back_drawable );
 
-	front_privPixmap_wrapper = (PrivPixmap *)exaGetPixmapDriverPrivate( front_pixmap );
-	back_privPixmap_wrapper = (PrivPixmap *)exaGetPixmapDriverPrivate( back_pixmap );
+	front_privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate( front_pixmap );
+	back_privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate( back_pixmap );
 
 	exchange( front->name, back->name );
 
@@ -268,16 +268,16 @@ static int exchange_buffers(DrawablePtr pDraw, DRI2BufferPtr front, DRI2BufferPt
 	 * exchange the driverPrivate info if
 	 * 1. it is a flip between the framebuffers
 	 */
-	both_framebuffer = (front_privPixmap_wrapper->priv->isFrameBuffer && back_privPixmap_wrapper->priv->isFrameBuffer);
-	one_framebuffer = (front_privPixmap_wrapper->priv->isFrameBuffer || back_privPixmap_wrapper->priv->isFrameBuffer);
+	both_framebuffer = (front_privPixmap->isFrameBuffer && back_privPixmap->isFrameBuffer);
+	one_framebuffer = (front_privPixmap->isFrameBuffer || back_privPixmap->isFrameBuffer);
 	
 	if ( both_framebuffer ) exchange_mem_info = FALSE;
 	else if ( !one_framebuffer && dri2_complete_cmd == DRI2_EXCHANGE_COMPLETE ) exchange_mem_info = TRUE;
 
 	if ( exchange_mem_info ) 
 	{
-	//	ErrorF("EXCHANGING UMP ID 0x%x with 0x%x (%s)\n", ump_secure_id_get(front_privPixmap_wrapper->priv->mem_info->handle), ump_secure_id_get(back_privPixmap_wrapper->priv->mem_info->handle), dri2_complete_cmd == DRI2_EXCHANGE_COMPLETE ? "SWAP" : "FLIP" );
-		exchange( front_privPixmap_wrapper->priv->mem_info, back_privPixmap_wrapper->priv->mem_info );
+	//	ErrorF("EXCHANGING UMP ID 0x%x with 0x%x (%s)\n", ump_secure_id_get(front_privPixmap->mem_info->handle), ump_secure_id_get(back_privPixmap->mem_info->handle), dri2_complete_cmd == DRI2_EXCHANGE_COMPLETE ? "SWAP" : "FLIP" );
+		exchange( front_privPixmap->mem_info, back_privPixmap->mem_info );
 	}
 	else if(both_framebuffer)
 	{
@@ -371,7 +371,7 @@ static int MaliDRI2ScheduleSwap(ClientPtr client, DrawablePtr pDraw, DRI2BufferP
 	{
 
 		unsigned int line_length = fPtr->fb_lcd_var.xres * fPtr->fb_lcd_var.bits_per_pixel / 8;
-		fPtr->fb_lcd_var.yoffset = back_pixmap_priv->priv->mem_info->offset / line_length;
+		fPtr->fb_lcd_var.yoffset = back_pixmap_priv->mem_info->offset / line_length;
 		//ErrorF("flip................ ofs %i\n", fPtr->fb_lcd_var.yoffset);
 
 		if ( ioctl( fPtr->fb_lcd_fd, FBIOPAN_DISPLAY, &fPtr->fb_lcd_var ) == -1 )

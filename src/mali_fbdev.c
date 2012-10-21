@@ -63,6 +63,7 @@ static Bool	MaliCloseScreen(int scrnIndex, ScreenPtr pScreen);
 
 static int pix24bpp = 0;
 static int malihwPrivateIndex = -1;
+static int global_drm_fd = -1;
 
 _X_EXPORT DriverRec MALI = {
 	MALI_VERSION,
@@ -237,13 +238,14 @@ static Bool fbdev_crtc_config_resize( ScrnInfoPtr pScrn, int width, int height )
 	pScrn->virtualY = height;
 
 	/* update pitch setting in EXA */
+#if 0
 	PixmapPtr frontPixmap = (*pScrn->pScreen->GetScreenPixmap)(pScrn->pScreen);
-	PixmapPtr backPixmap  = ((PrivPixmap *)exaGetPixmapDriverPrivate(frontPixmap))->priv->other_buffer;
+	PixmapPtr backPixmap  = ((PrivPixmap *)exaGetPixmapDriverPrivate(frontPixmap))->other_buffer;
 	
 	backPixmap->devKind = frontPixmap->devKind = pitch;
 	backPixmap->drawable.width = frontPixmap->drawable.width = width;
 	backPixmap->drawable.height = frontPixmap->drawable.width = height;
-
+#endif
 	pScrn->displayWidth = pitch / (pScrn->bitsPerPixel/8);
 
 	/* reinitialize the crtc to get the new setting */
@@ -878,12 +880,17 @@ static Bool mali_drm_open_master( ScrnInfoPtr pScrn )
 	drmSetVersion sv;
 	int err;
 
-	fPtr->drm_fd = drmOpen("mali_drm", NULL );
-	if ( fPtr->drm_fd == -1 )
+	if (global_drm_fd == -1)
 	{
-		xf86DrvMsg( pScrn->scrnIndex, X_ERROR, "%s Unable to open DRM: %s\n", __func__, strerror(errno));
-		return FALSE;
+		global_drm_fd = drmOpen("mali_drm", NULL);
+		if (global_drm_fd == -1)
+		{
+			xf86DrvMsg( pScrn->scrnIndex, X_ERROR, "%s Unable to open DRM: %s\n", __func__, strerror(errno));
+			return FALSE;
+		}
 	}
+
+	fPtr->drm_fd = global_drm_fd;
 	xf86DrvMsg( pScrn->scrnIndex, X_ERROR, "%s DRM OPEN (fd: 0x%x)\n", __func__, fPtr->drm_fd );
 
 	sv.drm_di_major = 1;
@@ -1163,7 +1170,7 @@ static Bool MaliScreenInit(int scrnIndex, ScreenPtr pScreen, int argc, char **ar
 	xf86LoadSubModule(pScrn, "exa");
 	fPtr->exa = exaDriverAlloc();
 
-	if ( maliSetupExa( pScreen, fPtr->exa, pScrn->virtualX, pScrn->virtualY, fPtr->fbmem ) )
+	if ( maliSetupExa( pScreen, fPtr->exa ) )
 	{
 		xf86DrvMsg(pScrn->scrnIndex, X_WARNING, "Initializing EXA Driver!\n");
 		exaDriverInit( pScreen, fPtr->exa );

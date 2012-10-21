@@ -31,16 +31,6 @@
 
 #include "mali_def.h"
 
-struct mali_info
-{
-	ScrnInfoPtr pScrn;
-	unsigned long fb_phys;
-	unsigned char *fb_virt;
-	int fb_xres;
-	int fb_yres;
-	int fd;
-};
-
 typedef struct
 {
 	ump_handle handle;
@@ -59,13 +49,8 @@ typedef struct
 	unsigned long addr;
 	mali_mem_info *mem_info;
 	PixmapPtr other_buffer;
-} PrivPixmapInternal;
-
-typedef struct
-{
-	PrivPixmapInternal *priv;
 } PrivPixmap;
 
-extern Bool maliSetupExa( ScreenPtr pScreen, ExaDriverPtr exa, int xres, int yres, unsigned char *virt );
+extern Bool maliSetupExa( ScreenPtr pScreen, ExaDriverPtr exa );
 
 #endif /* _MALI_EXA_H_ */

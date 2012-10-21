@@ -32,14 +32,10 @@
 #include "mali_def.h"
 #include "mali_fbdev.h"
 #include "mali_exa.h"
-#include "../../../devicedrv/umplock/umplock_ioctl.h"
-
-static struct mali_info mi;
+#include "umplock/umplock_ioctl.h"
 
 #define MALI_EXA_FUNC(s) exa->s = mali ## s
 #define MALI_ALIGN( value, base ) (((value) + ((base) - 1)) & ~((base) - 1))
-
-static int fd_fbdev = -1;
 
 static Bool maliPrepareSolid( PixmapPtr pPixmap, int alu, Pixel planemask, Pixel fg )
 {
@@ -103,21 +99,14 @@ static void* maliCreatePixmap(ScreenPtr pScreen, int size, int align )
 {
 	ScrnInfoPtr pScrn = xf86Screens[pScreen->myNum];
 	MaliPtr fPtr = MALIPTR(pScrn);
-	PrivPixmapInternal *privPixmap = calloc(1, sizeof(PrivPixmapInternal));
-	if ( NULL == privPixmap ) return NULL;
 
-	PrivPixmap *privPixmap_wrapper = calloc(1, sizeof(PrivPixmap));
-	if ( NULL == privPixmap_wrapper )
-	{
-		free( privPixmap );
+	PrivPixmap *privPixmap = calloc(1, sizeof(PrivPixmap));
+	if ( NULL == privPixmap )
 		return NULL;
-	}
 
 	IGNORE( pScreen );
 	IGNORE( size );
 	IGNORE( align );
-
-	privPixmap_wrapper->priv = privPixmap;
 
 	privPixmap->isFrameBuffer  = FALSE;
 	privPixmap->bits_per_pixel = 0;
@@ -126,13 +115,12 @@ static void* maliCreatePixmap(ScreenPtr pScreen, int size, int align )
 	privPixmap->fd_umplock     = fPtr->fd_umplock;
 #endif
 
-	return privPixmap_wrapper;
+	return privPixmap;
 }
 
 static void maliDestroyPixmap(ScreenPtr pScreen, void *driverPriv )
 {
-	PrivPixmap *privPixmap_wrapper = (PrivPixmap *)driverPriv;
-	PrivPixmapInternal *privPixmap = (PrivPixmapInternal *)privPixmap_wrapper->priv;
+	PrivPixmap *privPixmap = (PrivPixmap *)driverPriv;
 
 	IGNORE( pScreen );
 	if ( NULL != privPixmap->mem_info )
@@ -144,7 +132,6 @@ static void maliDestroyPixmap(ScreenPtr pScreen, void *driverPriv )
 		ump_reference_release(privPixmap->mem_info->handle);
 		free( privPixmap->mem_info );
 		free( privPixmap );
-		free( privPixmap_wrapper);
 	}
 }
 
@@ -153,10 +140,11 @@ static unsigned int offset = 0;
 static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int depth, int bitsPerPixel, int devKind, pointer pPixData)
 {
 	unsigned int size;
-	PrivPixmap *privPixmap_wrapper = (PrivPixmap *)exaGetPixmapDriverPrivate(pPixmap);
-	PrivPixmapInternal *privPixmap = (PrivPixmapInternal *)privPixmap_wrapper->priv;
+	PrivPixmap *privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(pPixmap);
 	mali_mem_info *mem_info;
 	ScreenPtr pScreen = pPixmap->drawable.pScreen;
+	ScrnInfoPtr pScrn = xf86Screens[pScreen->myNum];
+	MaliPtr fPtr = MALIPTR(pScrn);
 
 	if (!pPixmap) 
 	{
@@ -165,7 +153,7 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 
 	miModifyPixmapHeader(pPixmap, width, height, depth, bitsPerPixel, devKind, pPixData);
 
-	if ((pPixData == mi.fb_virt) || offset)
+	if ((pPixData == fPtr->fbmem) || offset)
 	{
 		/* Wrap one of the fbdev virtual buffers */
 		ump_secure_id ump_id = UMP_INVALID_SECURE_ID;
@@ -182,34 +170,34 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 		mem_info = calloc(1, sizeof(*mem_info));
 		if (!mem_info) 
 		{
-			xf86DrvMsg(mi.pScrn->scrnIndex, X_ERROR, "[%s:%d] failed to allocate for memory metadata\n", __FUNCTION__, __LINE__);
+			xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "[%s:%d] failed to allocate for memory metadata\n", __FUNCTION__, __LINE__);
 			return FALSE;
 		}
 
 		/* get the secure ID for the framebuffers */
 		if ( !offset ) 
 		{
-			(void)ioctl( fd_fbdev, GET_UMP_SECURE_ID_BUF1, &ump_id );
-			ErrorF("GET_UMP_SECURE_ID_BUF1 returned 0x%x offset: %i virt address: %p fb_virt: %p\n", ump_id, offset, pPixData, mi.fb_virt);
+			(void)ioctl( fPtr->fb_lcd_fd, GET_UMP_SECURE_ID_BUF1, &ump_id );
+			ErrorF("GET_UMP_SECURE_ID_BUF1 returned 0x%x offset: %i virt address: %p fb_virt: %p\n", ump_id, offset, pPixData, fPtr->fbmem);
 		}
 		else 
 		{
-			(void)ioctl( fd_fbdev, GET_UMP_SECURE_ID_BUF2, &ump_id );
-			ErrorF("GET_UMP_SECURE_ID_BUF2 returned 0x%x offset: %i virt address: %p fb_virt: %p\n", ump_id, offset, pPixData, mi.fb_virt);
+			(void)ioctl( fPtr->fb_lcd_fd, GET_UMP_SECURE_ID_BUF2, &ump_id );
+			ErrorF("GET_UMP_SECURE_ID_BUF2 returned 0x%x offset: %i virt address: %p fb_virt: %p\n", ump_id, offset, pPixData, fPtr->fbmem);
 		}
 
 		if ( UMP_INVALID_SECURE_ID == ump_id)
 		{
 			free( mem_info );
 			privPixmap->mem_info = NULL;
-			xf86DrvMsg( mi.pScrn->scrnIndex, X_ERROR, "[%s:%d] UMP failed to retrieve secure id\n", __FUNCTION__, __LINE__);
+			xf86DrvMsg( pScrn->scrnIndex, X_ERROR, "[%s:%d] UMP failed to retrieve secure id\n", __FUNCTION__, __LINE__);
 			return FALSE;
 		}
 
 		mem_info->handle = ump_handle_create_from_secure_id( ump_id );
 		if ( UMP_INVALID_MEMORY_HANDLE == mem_info->handle )
 		{
-			xf86DrvMsg( mi.pScrn->scrnIndex, X_ERROR, "[%s:%d] UMP failed to create handle from secure id\n", __FUNCTION__, __LINE__);
+			xf86DrvMsg( pScrn->scrnIndex, X_ERROR, "[%s:%d] UMP failed to create handle from secure id\n", __FUNCTION__, __LINE__);
 			free( mem_info );
 			privPixmap->mem_info = NULL;
 			return FALSE;
@@ -227,7 +215,7 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 		privPixmap->mem_info->offset = offset;
 
 		/* TODO: Only wrap the other half if there is another half! */
-		if (pPixData == mi.fb_virt)
+		if (pPixData == fPtr->fbmem)
 		{
 			/* This is executed only when this function is called directly from X. We need to create the
 			 * back buffer now because we can't "wrap" existing memory in a pixmap during DRI2CreateBuffer
@@ -244,12 +232,12 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 			 * accessible from the screen pixmap, whichever of the fbdev pixmaps happens to be the screen
 			 * pixmap at the time */
 			other_privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(privPixmap->other_buffer);
-			other_privPixmap->priv->other_buffer = pPixmap;
+			other_privPixmap->other_buffer = pPixmap;
 
 			offset = 0;
 		}
 
-		xf86DrvMsg( mi.pScrn->scrnIndex, X_INFO, "Creating FRAMEBUFFER pixmap %p at offset %lu, privPixmap=%p\n",
+		xf86DrvMsg( pScrn->scrnIndex, X_INFO, "Creating FRAMEBUFFER pixmap %p at offset %lu, privPixmap=%p\n",
 				pPixmap, privPixmap->mem_info->offset, privPixmap);
 
 		return TRUE;
@@ -301,7 +289,7 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 		mem_info = calloc(1, sizeof(*mem_info));
 		if (!mem_info) 
 		{
-			xf86DrvMsg(mi.pScrn->scrnIndex, X_ERROR, "[%s:%d] failed to allocate memory metadata\n", __FUNCTION__, __LINE__);
+			xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "[%s:%d] failed to allocate memory metadata\n", __FUNCTION__, __LINE__);
 			return FALSE;
 		}
 	}
@@ -314,7 +302,7 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 
 	if ( UMP_INVALID_MEMORY_HANDLE == mem_info->handle )
 	{
-		xf86DrvMsg(mi.pScrn->scrnIndex, X_ERROR, "[%s:%d] failed to allocate UMP memory (%i bytes)\n", __FUNCTION__, __LINE__, size);
+		xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "[%s:%d] failed to allocate UMP memory (%i bytes)\n", __FUNCTION__, __LINE__, size);
 		return FALSE;
 	}
 
@@ -329,8 +317,7 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 static Bool maliPixmapIsOffscreen( PixmapPtr pPix )
 {
 	ScreenPtr pScreen = pPix->drawable.pScreen;
-	PrivPixmap *privPixmap_wrapper = (PrivPixmap *)exaGetPixmapDriverPrivate(pPix);
-	PrivPixmapInternal *privPixmap = (PrivPixmapInternal *)privPixmap_wrapper->priv;
+	PrivPixmap *privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(pPix);
 
 	if (pScreen->GetScreenPixmap(pScreen) == pPix ) 
 	{
@@ -347,15 +334,18 @@ static Bool maliPixmapIsOffscreen( PixmapPtr pPix )
 
 static Bool maliPrepareAccess(PixmapPtr pPix, int index)
 {
-	PrivPixmap *privPixmap_wrapper = (PrivPixmap *)exaGetPixmapDriverPrivate(pPix);
-	PrivPixmapInternal *privPixmap = (PrivPixmapInternal *)privPixmap_wrapper->priv;
+	ScreenPtr pScreen = pPix->drawable.pScreen;
+	ScrnInfoPtr pScrn = xf86Screens[pScreen->myNum];
+	MaliPtr fPtr = MALIPTR(pScrn);
+
+	PrivPixmap *privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(pPix);
 	mali_mem_info *mem_info;
 
 	IGNORE( index );
 
 	if ( !privPixmap ) 
 	{
-		xf86DrvMsg(mi.pScrn->scrnIndex, X_ERROR, "[%s:%d] Failed to get private pixmap data\n", __FUNCTION__, __LINE__);
+		xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "[%s:%d] Failed to get private pixmap data\n", __FUNCTION__, __LINE__);
 		return FALSE;
 	}
 
@@ -366,7 +356,7 @@ static Bool maliPrepareAccess(PixmapPtr pPix, int index)
 		{
 			if (privPixmap->isFrameBuffer)
 			{
-				privPixmap->addr = (unsigned long)mi.fb_virt;
+				privPixmap->addr = (unsigned long)fPtr->fbmem;
 			}
 			else
 			{
@@ -377,14 +367,14 @@ static Bool maliPrepareAccess(PixmapPtr pPix, int index)
 	}
 	else
 	{
-		xf86DrvMsg(mi.pScrn->scrnIndex, X_ERROR, "[%s:%d] No mem_info on pixmap\n", __FUNCTION__, __LINE__);
+		xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "[%s:%d] No mem_info on pixmap\n", __FUNCTION__, __LINE__);
 		return FALSE;
 	}
 
 	pPix->devPrivate.ptr = (void *)(privPixmap->addr);
 	if ( NULL == pPix->devPrivate.ptr ) 
 	{
-		xf86DrvMsg(mi.pScrn->scrnIndex, X_ERROR, "[%s:%d] cpu address not set\n", __FUNCTION__, __LINE__);
+		xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "[%s:%d] cpu address not set\n", __FUNCTION__, __LINE__);
 		return FALSE;
 	}
 
@@ -428,8 +418,7 @@ static Bool maliPrepareAccess(PixmapPtr pPix, int index)
 
 static void maliFinishAccess(PixmapPtr pPix, int index)
 {
-	PrivPixmap *privPixmap_wrapper = (PrivPixmap *)exaGetPixmapDriverPrivate(pPix);
-	PrivPixmapInternal *privPixmap = (PrivPixmapInternal *)privPixmap_wrapper->priv;
+	PrivPixmap *privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(pPix);
 	mali_mem_info *mem_info;
 
 	IGNORE( index );
@@ -515,29 +504,14 @@ static void maliDoneComposite( PixmapPtr pDst )
 	IGNORE( pDst );
 }
 
-
-static void maliDumpInfo(void)
-{
-	xf86DrvMsg(mi.pScrn->scrnIndex, X_INFO, "XRES: %i YRES: %i PHYS: 0x%x VIRT: 0x%x\n", mi.fb_xres, mi.fb_yres, (int)mi.fb_phys, (int)mi.fb_virt);
-}
-
-Bool maliSetupExa( ScreenPtr pScreen, ExaDriverPtr exa, int xres, int yres, unsigned char *virt )
+Bool maliSetupExa( ScreenPtr pScreen, ExaDriverPtr exa )
 {
 	ScrnInfoPtr pScrn = xf86Screens[pScreen->myNum];
 	MaliPtr fPtr = MALIPTR(pScrn);
 
 	if ( NULL == exa ) return FALSE;
 
-	memset(&mi, 0, sizeof(mi));
-	mi.pScrn = pScrn;
-	mi.fb_xres = xres;
-	mi.fb_yres = yres;
-	mi.fb_phys = pScrn->memPhysBase;
-	mi.fb_virt = virt;
-
 	TRACE_ENTER();
-
-	maliDumpInfo();
 
 	exa->exa_major = 2;
 	exa->exa_minor = 0;
@@ -549,10 +523,6 @@ Bool maliSetupExa( ScreenPtr pScreen, ExaDriverPtr exa, int xres, int yres, unsi
 	exa->memorySize = fPtr->fb_lcd_fix.smem_len;
 	exa->pixmapOffsetAlign = 4096;
 	exa->pixmapPitchAlign = 8;
-
-	fd_fbdev = fPtr->fb_lcd_fd;
-
-	maliDumpInfo();
 
 	MALI_EXA_FUNC(PrepareSolid);
 	MALI_EXA_FUNC(Solid);
@@ -579,13 +549,13 @@ Bool maliSetupExa( ScreenPtr pScreen, ExaDriverPtr exa, int xres, int yres, unsi
 
 	if ( UMP_OK != ump_open() )
 	{
-		xf86DrvMsg(mi.pScrn->scrnIndex, X_ERROR, "[%s:%d] failed to open UMP subsystem\n", __FUNCTION__, __LINE__);
+		xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "[%s:%d] failed to open UMP subsystem\n", __FUNCTION__, __LINE__);
 		TRACE_EXIT();
 		return FALSE;
 	}
 
 
-	xf86DrvMsg(mi.pScrn->scrnIndex, X_INFO, "Mali EXA driver is loaded successfully\n");
+	xf86DrvMsg(pScrn->scrnIndex, X_INFO, "Mali EXA driver is loaded successfully\n");
 	TRACE_EXIT();
 
 	return TRUE;
