@@ -25,10 +25,11 @@
 
 #include "exa.h"
 #include <ump/ump.h>
+#if !(defined(UMP_VERSION_MAJOR) && UMP_VERSION_MAJOR == 2)
 #include <ump/ump_ref_drv.h>
+#endif
 
-/* Change this ioctl according to your specific UMP integration with LCD kernel driver */
-#define GET_UMP_SECURE_ID _IOWR('m', 310, unsigned int)
+#include "mali_def.h"
 
 struct mali_info
 {
@@ -44,16 +45,25 @@ typedef struct
 {
 	ump_handle handle;
 	unsigned long usize;
+	unsigned long offset;
 } mali_mem_info;
 
 typedef struct
 {
 	Bool isFrameBuffer;
-    Bool gpu_access;
 	int refs;
 	int bits_per_pixel;
+#if UMP_LOCK_ENABLED
+	int fd_umplock;
+#endif
 	unsigned long addr;
 	mali_mem_info *mem_info;
+	PixmapPtr other_buffer;
+} PrivPixmapInternal;
+
+typedef struct
+{
+	PrivPixmapInternal *priv;
 } PrivPixmap;
 
 extern Bool maliSetupExa( ScreenPtr pScreen, ExaDriverPtr exa, int xres, int yres, unsigned char *virt );

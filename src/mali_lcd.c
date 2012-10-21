@@ -25,6 +25,7 @@
 #endif
 
 #include <sys/ioctl.h>
+#include "xorg-server.h"
 #include "xf86.h"
 #include "xf86Crtc.h"
 

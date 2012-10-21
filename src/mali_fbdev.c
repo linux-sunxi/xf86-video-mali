@@ -34,6 +34,7 @@
 #include <fcntl.h>
 #include <linux/fb.h>
 
+#include "xorg-server.h"
 #include "xf86.h"
 #include "xf86cmap.h"
 #include <xf86drm.h>
@@ -97,6 +98,16 @@ static const OptionInfoRec MaliOptions[] = {
 };
 
 #ifdef XFree86LOADER
+
+#ifndef PACKAGE_VERSION_MAJOR
+#define PACKAGE_VERSION_MAJOR 0
+#endif
+#ifndef PACKAGE_VERSION_MINOR
+#define PACKAGE_VERSION_MINOR 1
+#endif
+#ifndef PACKAGE_VERSION_PATCHLEVEL
+#define PACKAGE_VERSION_PATCHLEVEL 1
+#endif
 
 MODULESETUPPROTO(MaliSetup);
 
@@ -226,7 +237,13 @@ static Bool fbdev_crtc_config_resize( ScrnInfoPtr pScrn, int width, int height )
 	pScrn->virtualY = height;
 
 	/* update pitch setting in EXA */
-	(*pScrn->pScreen->GetScreenPixmap)(pScrn->pScreen)->devKind = pitch;
+	PixmapPtr frontPixmap = (*pScrn->pScreen->GetScreenPixmap)(pScrn->pScreen);
+	PixmapPtr backPixmap  = ((PrivPixmap *)exaGetPixmapDriverPrivate(frontPixmap))->priv->other_buffer;
+	
+	backPixmap->devKind = frontPixmap->devKind = pitch;
+	backPixmap->drawable.width = frontPixmap->drawable.width = width;
+	backPixmap->drawable.height = frontPixmap->drawable.width = height;
+
 	pScrn->displayWidth = pitch / (pScrn->bitsPerPixel/8);
 
 	/* reinitialize the crtc to get the new setting */
@@ -1199,6 +1216,19 @@ static Bool MaliScreenInit(int scrnIndex, ScreenPtr pScreen, int argc, char **ar
 		if (n) xf86XVScreenInit(pScreen,ptr,n);
 	}
 
+#if UMP_LOCK_ENABLED
+	fPtr->fd_umplock = open("/dev/umplock", O_RDWR);
+	if ( -1 == fPtr->fd_umplock )
+	{
+		xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "Failed to open umplock device!\n" );
+		fPtr->fd_umplock = 0;
+	}
+	else
+	{
+		xf86DrvMsg( pScrn->scrnIndex, X_INFO, "Opened umplock device!\n" );
+	}
+#endif /* UMP_LOCK_ENABLED */
+
 	return TRUE;
 }
 
@@ -1224,6 +1254,13 @@ static Bool MaliCloseScreen(int scrnIndex, ScreenPtr pScreen)
 		MaliDRI2CloseScreen( pScreen );
 		mali_drm_close_master( pScrn );
 	}
+#if UMP_LOCK_ENABLED
+	if ( fPtr->fd_umplock )
+	{
+		close( fPtr->fd_umplock );
+		fPtr->fd_umplock = 0;
+	}
+#endif /* UMP_LOCK_ENABLED */
 
 	return TRUE;
 }

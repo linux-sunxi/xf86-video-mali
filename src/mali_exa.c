@@ -22,14 +22,17 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <xf86.h>
 
 #include "mali_def.h"
 #include "mali_fbdev.h"
 #include "mali_exa.h"
+#include "../../../devicedrv/umplock/umplock_ioctl.h"
 
 static struct mali_info mi;
 
@@ -98,35 +101,62 @@ static void maliWaitMarker( ScreenPtr pScreen, int marker )
 
 static void* maliCreatePixmap(ScreenPtr pScreen, int size, int align )
 {
-	PrivPixmap *privPixmap = calloc(1, sizeof(PrivPixmap));
+	ScrnInfoPtr pScrn = xf86Screens[pScreen->myNum];
+	MaliPtr fPtr = MALIPTR(pScrn);
+	PrivPixmapInternal *privPixmap = calloc(1, sizeof(PrivPixmapInternal));
+	if ( NULL == privPixmap ) return NULL;
+
+	PrivPixmap *privPixmap_wrapper = calloc(1, sizeof(PrivPixmap));
+	if ( NULL == privPixmap_wrapper )
+	{
+		free( privPixmap );
+		return NULL;
+	}
 
 	IGNORE( pScreen );
 	IGNORE( size );
 	IGNORE( align );
-	privPixmap->bits_per_pixel = 0;
 
-	return privPixmap;
+	privPixmap_wrapper->priv = privPixmap;
+
+	privPixmap->isFrameBuffer  = FALSE;
+	privPixmap->bits_per_pixel = 0;
+	privPixmap->other_buffer   = NULL;
+#if UMP_LOCK_ENABLED
+	privPixmap->fd_umplock     = fPtr->fd_umplock;
+#endif
+
+	return privPixmap_wrapper;
 }
 
 static void maliDestroyPixmap(ScreenPtr pScreen, void *driverPriv )
 {
-	PrivPixmap *privPixmap = (PrivPixmap *)driverPriv;
+	PrivPixmap *privPixmap_wrapper = (PrivPixmap *)driverPriv;
+	PrivPixmapInternal *privPixmap = (PrivPixmapInternal *)privPixmap_wrapper->priv;
 
 	IGNORE( pScreen );
 	if ( NULL != privPixmap->mem_info )
 	{
+		/* TODO: Need to destroy the other buffer if it's present. At the moment this never gets called for a
+		 * framebuffer pixmap so asserting here for now because it will break if it is called with a framebuffer
+		 * pixmap */
+		assert(privPixmap->other_buffer == NULL);
 		ump_reference_release(privPixmap->mem_info->handle);
 		free( privPixmap->mem_info );
-		privPixmap->mem_info = NULL;
 		free( privPixmap );
+		free( privPixmap_wrapper);
 	}
 }
+
+static unsigned int offset = 0;
 
 static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int depth, int bitsPerPixel, int devKind, pointer pPixData)
 {
 	unsigned int size;
-	PrivPixmap *privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(pPixmap);
+	PrivPixmap *privPixmap_wrapper = (PrivPixmap *)exaGetPixmapDriverPrivate(pPixmap);
+	PrivPixmapInternal *privPixmap = (PrivPixmapInternal *)privPixmap_wrapper->priv;
 	mali_mem_info *mem_info;
+	ScreenPtr pScreen = pPixmap->drawable.pScreen;
 
 	if (!pPixmap) 
 	{
@@ -135,8 +165,9 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 
 	miModifyPixmapHeader(pPixmap, width, height, depth, bitsPerPixel, devKind, pPixData);
 
-	if (pPixData == mi.fb_virt) 
+	if ((pPixData == mi.fb_virt) || offset)
 	{
+		/* Wrap one of the fbdev virtual buffers */
 		ump_secure_id ump_id = UMP_INVALID_SECURE_ID;
 
 		privPixmap->isFrameBuffer = TRUE;
@@ -155,8 +186,17 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 			return FALSE;
 		}
 
-		/* get the secure ID for the framebuffer */
-		(void)ioctl( fd_fbdev, GET_UMP_SECURE_ID, &ump_id );
+		/* get the secure ID for the framebuffers */
+		if ( !offset ) 
+		{
+			(void)ioctl( fd_fbdev, GET_UMP_SECURE_ID_BUF1, &ump_id );
+			ErrorF("GET_UMP_SECURE_ID_BUF1 returned 0x%x offset: %i virt address: %p fb_virt: %p\n", ump_id, offset, pPixData, mi.fb_virt);
+		}
+		else 
+		{
+			(void)ioctl( fd_fbdev, GET_UMP_SECURE_ID_BUF2, &ump_id );
+			ErrorF("GET_UMP_SECURE_ID_BUF2 returned 0x%x offset: %i virt address: %p fb_virt: %p\n", ump_id, offset, pPixData, mi.fb_virt);
+		}
 
 		if ( UMP_INVALID_SECURE_ID == ump_id)
 		{
@@ -181,15 +221,46 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 		privPixmap->mem_info = mem_info;
 		if( bitsPerPixel != 0 ) privPixmap->bits_per_pixel = bitsPerPixel;
 
+		/* When this is called directly from X to create the front buffer, offset is zero as expected. When this
+		 * function is called recursively to create the back buffer, offset is the offset within the fbdev to
+		 * the second buffer */
+		privPixmap->mem_info->offset = offset;
+
+		/* TODO: Only wrap the other half if there is another half! */
+		if (pPixData == mi.fb_virt)
+		{
+			/* This is executed only when this function is called directly from X. We need to create the
+			 * back buffer now because we can't "wrap" existing memory in a pixmap during DRI2CreateBuffer
+			 * for the back buffer of the framebuffer. In DRI2CreateBuffer instead of allocating a new
+			 * pixmap for the back buffer like we do for non-swappable windows, we'll just grab this pointer
+			 * from the screen pixmap and return it. */
+
+			PrivPixmap *other_privPixmap;
+
+			offset = size;
+			privPixmap->other_buffer = (*pScreen->CreatePixmap) (pScreen, width, height, depth, 0);
+
+			/* Store a pointer to this pixmap in the one we just created. Both fbdev pixmaps are then
+			 * accessible from the screen pixmap, whichever of the fbdev pixmaps happens to be the screen
+			 * pixmap at the time */
+			other_privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(privPixmap->other_buffer);
+			other_privPixmap->priv->other_buffer = pPixmap;
+
+			offset = 0;
+		}
+
+		xf86DrvMsg( mi.pScrn->scrnIndex, X_INFO, "Creating FRAMEBUFFER pixmap %p at offset %lu, privPixmap=%p\n",
+				pPixmap, privPixmap->mem_info->offset, privPixmap);
+
 		return TRUE;
 	}
-	else
-	{
-		privPixmap->isFrameBuffer = FALSE;
-	}
 
-	if ( pPixData ) 
+	if ( pPixData )
 	{
+		/* TODO: When this happens we're being told to wrap existing pixmap data for which we don't know the UMP
+		 * handle. We can and still need to wrap it but it won't be offscreen - we can't accelerate it in any
+		 * way. */
+
 		if ( privPixmap->mem_info != NULL ) 
 		{
 			return TRUE;
@@ -235,7 +306,12 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 		}
 	}
 
-	mem_info->handle = ump_ref_drv_allocate( size, UMP_REF_DRV_CONSTRAINT_USE_CACHE );
+#if UMP_LOCK_ENABLED
+	mem_info->handle = ump_ref_drv_allocate( size, UMP_REF_DRV_CONSTRAINT_PHYSICALLY_LINEAR | UMP_REF_DRV_CONSTRAINT_USE_CACHE );
+#else
+	mem_info->handle = ump_ref_drv_allocate( size, UMP_REF_DRV_CONSTRAINT_PHYSICALLY_LINEAR);
+#endif
+
 	if ( UMP_INVALID_MEMORY_HANDLE == mem_info->handle )
 	{
 		xf86DrvMsg(mi.pScrn->scrnIndex, X_ERROR, "[%s:%d] failed to allocate UMP memory (%i bytes)\n", __FUNCTION__, __LINE__, size);
@@ -243,7 +319,6 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 	}
 
 	mem_info->usize = size;
-	privPixmap->gpu_access = FALSE;
 	privPixmap->mem_info = mem_info;
 	privPixmap->mem_info->usize = size;
 	privPixmap->bits_per_pixel = 16;
@@ -254,7 +329,8 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 static Bool maliPixmapIsOffscreen( PixmapPtr pPix )
 {
 	ScreenPtr pScreen = pPix->drawable.pScreen;
-	PrivPixmap *privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(pPix);
+	PrivPixmap *privPixmap_wrapper = (PrivPixmap *)exaGetPixmapDriverPrivate(pPix);
+	PrivPixmapInternal *privPixmap = (PrivPixmapInternal *)privPixmap_wrapper->priv;
 
 	if (pScreen->GetScreenPixmap(pScreen) == pPix ) 
 	{
@@ -271,7 +347,8 @@ static Bool maliPixmapIsOffscreen( PixmapPtr pPix )
 
 static Bool maliPrepareAccess(PixmapPtr pPix, int index)
 {
-	PrivPixmap *privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(pPix);
+	PrivPixmap *privPixmap_wrapper = (PrivPixmap *)exaGetPixmapDriverPrivate(pPix);
+	PrivPixmapInternal *privPixmap = (PrivPixmapInternal *)privPixmap_wrapper->priv;
 	mali_mem_info *mem_info;
 
 	IGNORE( index );
@@ -287,7 +364,15 @@ static Bool maliPrepareAccess(PixmapPtr pPix, int index)
 	{
 		if ( privPixmap->refs == 0 ) 
 		{
-			privPixmap->addr = (unsigned long)ump_mapped_pointer_get( mem_info->handle );
+			if (privPixmap->isFrameBuffer)
+			{
+				privPixmap->addr = (unsigned long)mi.fb_virt;
+			}
+			else
+			{
+				privPixmap->addr = (unsigned long)ump_mapped_pointer_get( mem_info->handle );
+			}
+			privPixmap->addr += mem_info->offset;
 		}
 	}
 	else
@@ -303,19 +388,48 @@ static Bool maliPrepareAccess(PixmapPtr pPix, int index)
 		return FALSE;
 	}
 
-	if ( privPixmap->gpu_access )
-	{
-		ump_cpu_msync_now( mem_info->handle, UMP_MSYNC_CLEAN_AND_INVALIDATE, (void *)privPixmap->addr, mem_info->usize );
-	}
-
 	privPixmap->refs++;
+
+#if UMP_LOCK_ENABLED
+	if ( !privPixmap->isFrameBuffer )
+	{
+		int secure_id = 0;
+		_lock_item_s item;
+
+		secure_id = ump_secure_id_get( mem_info->handle );
+		if ( secure_id )
+		{
+			item.secure_id = secure_id;
+			item.usage = _LOCK_ACCESS_CPU_WRITE;
+			if ( privPixmap->fd_umplock )
+			{
+				ioctl( privPixmap->fd_umplock, LOCK_IOCTL_CREATE, &item );
+				if ( ioctl( privPixmap->fd_umplock, LOCK_IOCTL_PROCESS, &item ) < 0 )
+				{
+					int max_retries = 5;
+					ErrorF("Unable to process lock item with ID 0x%x - throttling\n", item.secure_id);
+					while ( (ioctl( privPixmap->fd_umplock, LOCK_IOCTL_PROCESS, &item ) < 0) && max_retries )
+					{
+						usleep(2000);
+						max_retries--;
+					}
+					if ( max_retries == 0 ) ErrorF( "Warning: Max retries == 0\n" );
+				}
+			}
+			ump_cache_operations_control( UMP_CACHE_OP_START );
+			ump_switch_hw_usage_secure_id( item.secure_id, UMP_USED_BY_CPU );
+			ump_cache_operations_control( UMP_CACHE_OP_FINISH );
+		}
+	}
+#endif
 
 	return TRUE;
 }
 
 static void maliFinishAccess(PixmapPtr pPix, int index)
 {
-	PrivPixmap *privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(pPix);
+	PrivPixmap *privPixmap_wrapper = (PrivPixmap *)exaGetPixmapDriverPrivate(pPix);
+	PrivPixmapInternal *privPixmap = (PrivPixmapInternal *)privPixmap_wrapper->priv;
 	mali_mem_info *mem_info;
 
 	IGNORE( index );
@@ -332,13 +446,24 @@ static void maliFinishAccess(PixmapPtr pPix, int index)
 
 	mem_info = privPixmap->mem_info;
 
-	if ( privPixmap->gpu_access )
-	{
-		ump_cpu_msync_now( mem_info->handle, UMP_MSYNC_CLEAN, (void *)privPixmap->addr, mem_info->usize );
-	}
-
 	if ( !privPixmap->isFrameBuffer ) 
 	{
+#if UMP_LOCK_ENABLED
+		int secure_id = 0;
+		_lock_item_s item;
+
+		if ( privPixmap->fd_umplock )
+		{
+			secure_id = ump_secure_id_get( mem_info->handle );
+			if ( secure_id )
+			{
+				item.secure_id = secure_id;
+				item.usage = _LOCK_ACCESS_CPU_WRITE;
+				ioctl( privPixmap->fd_umplock, LOCK_IOCTL_RELEASE, &item );
+			}
+		}
+#endif
+
 		if ( privPixmap->refs == 1 )
 		{
 			if ( NULL != mem_info ) ump_mapped_pointer_release( mem_info->handle );
@@ -391,7 +516,7 @@ static void maliDoneComposite( PixmapPtr pDst )
 }
 
 
-static void maliDumpInfo()
+static void maliDumpInfo(void)
 {
 	xf86DrvMsg(mi.pScrn->scrnIndex, X_INFO, "XRES: %i YRES: %i PHYS: 0x%x VIRT: 0x%x\n", mi.fb_xres, mi.fb_yres, (int)mi.fb_phys, (int)mi.fb_virt);
 }
