@@ -32,7 +32,10 @@
 #include "mali_def.h"
 #include "mali_fbdev.h"
 #include "mali_exa.h"
-#include "../../../devicedrv/umplock/umplock_ioctl.h"
+
+#if UMP_LOCK_ENABLED
+#include "umplock_ioctl.h"
+#endif
 
 static struct mali_info mi;
 

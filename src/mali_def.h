@@ -24,7 +24,7 @@
 #define _MALI_DEF_H_
 
 #ifndef MALI_DEBUG
-#define MALI_DEBUG  1
+#define MALI_DEBUG  0
 #endif
 
 #define UMP_LOCK_ENABLED 0
