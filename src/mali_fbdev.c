@@ -1245,7 +1245,7 @@ static Bool MaliCloseScreen(int scrnIndex, ScreenPtr pScreen)
 	pScreen->CreateScreenResources = fPtr->CreateScreenResources;
 	pScreen->CloseScreen = fPtr->CloseScreen;
 
-	(*pScreen->CloseScreen)(scrnIndex, pScreen);
+	(*pScreen->CloseScreen)(pScreen);
 
 	if ( fPtr->dri_open && fPtr->dri_render == DRI_2 )
 	{
