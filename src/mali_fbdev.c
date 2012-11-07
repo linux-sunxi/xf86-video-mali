@@ -329,7 +329,7 @@ static void FBDev_crtc_config( ScrnInfoPtr pScrn )
 	TRACE_EXIT();
 }
 
-static int mali_open( int scrnIndex, char *device, char **namep )
+static int mali_open( int scrnIndex, const char *device, char **namep )
 {
 	int fd;
 	struct fb_fix_screeninfo fix;
@@ -663,7 +663,7 @@ void MaliHWDPMSSet(ScrnInfoPtr pScrn, int mode, int flags)
 	}
 }
 
-xf86SwitchModeProc *MaliHWSwitchModeWeak( void ) { return MaliHWSwitchMode; }
+xf86SwitchModeProc *MaliHWSwitchModeWeak(void) { return MaliHWSwitchMode; }
 xf86AdjustFrameProc *MaliHWAdjustFrameWeak(void) { return MaliHWAdjustFrame; }
 xf86EnterVTProc *MaliHWEnterVTWeak(void) { return MaliHWEnterVT; }
 xf86LeaveVTProc *MaliHWLeaveVTWeak(void) { return MaliHWLeaveVT; }
@@ -679,7 +679,6 @@ static Bool MaliProbe( DriverPtr drv, int flags )
 	Bool foundScreen = FALSE;
 	ScrnInfoPtr pScrn;
 	GDevPtr *devSections;
-	char *dev = "/dev/fb0";
 
 	ERROR_STR("MaliProbe");
 
@@ -689,7 +688,7 @@ static Bool MaliProbe( DriverPtr drv, int flags )
 
 	for (i = 0; i < numDevSections; i++) 
 	{
-		dev = xf86FindOptionValue( devSections[i]->options, "fbdev" );
+		char *dev = xf86FindOptionValue( devSections[i]->options, "fbdev" );
 		if ( MaliHWProbe( dev, NULL ) )
 		{
 			pScrn = NULL;
@@ -712,7 +711,7 @@ static Bool MaliProbe( DriverPtr drv, int flags )
 				pScrn->LeaveVT       = MaliHWLeaveVTWeak();
 				pScrn->ValidMode     = MaliHWValidModeWeak();
 
-				xf86DrvMsg(pScrn->scrnIndex, X_INFO, "using %s\n", dev ? dev : "default device");
+				xf86DrvMsg(pScrn->scrnIndex, X_INFO, "using %s\n", dev);
 			}
 		}
 	}
@@ -721,7 +720,7 @@ static Bool MaliProbe( DriverPtr drv, int flags )
 	return foundScreen;
 }
 
-Bool MaliHWInit( ScrnInfoPtr pScrn, char *device )
+Bool MaliHWInit( ScrnInfoPtr pScrn, const char *device )
 {
 	MaliHWPtr fPtr;
 
