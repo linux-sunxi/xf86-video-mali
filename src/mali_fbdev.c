@@ -58,8 +58,14 @@ static const OptionInfoRec * MaliAvailableOptions(int chipid, int busid);
 static void	MaliIdentify(int flags);
 static Bool	MaliProbe(DriverPtr drv, int flags);
 static Bool	MaliPreInit(ScrnInfoPtr pScrn, int flags);
+
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
+static Bool	MaliScreenInit(ScreenPtr pScreen, int argc, char **argv);
+static Bool	MaliCloseScreen(ScreenPtr pScreen);
+#else
 static Bool	MaliScreenInit(int Index, ScreenPtr pScreen, int argc, char **argv);
 static Bool	MaliCloseScreen(int scrnIndex, ScreenPtr pScreen);
+#endif
 
 static int pix24bpp = 0;
 static int malihwPrivateIndex = -1;
@@ -564,7 +570,11 @@ Bool MaliHWSaveScreen(ScreenPtr pScreen, int mode)
 
 ModeStatus MaliHWValidMode(int scrnIndex, DisplayModePtr mode, Bool verbose, int flags)
 {
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
+	ScrnInfoPtr pScrn = xf86ScreenToScrn(pScreen);
+#else
 	ScrnInfoPtr pScrn = xf86Screens[scrnIndex];
+#endif
 
 	TRACE_ENTER();
 
@@ -578,7 +588,11 @@ ModeStatus MaliHWValidMode(int scrnIndex, DisplayModePtr mode, Bool verbose, int
 
 Bool MaliHWSwitchMode(int scrnIndex, DisplayModePtr mode, int flags)
 {
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
+	ScrnInfoPtr pScrn = xf86ScreenToScrn(pScreen);
+#else
 	ScrnInfoPtr pScrn = xf86Screens[scrnIndex];
+#endif
 
 	TRACE_ENTER();
 	IGNORE(flags);
@@ -590,7 +604,12 @@ Bool MaliHWSwitchMode(int scrnIndex, DisplayModePtr mode, int flags)
 
 void MaliHWAdjustFrame(int scrnIndex, int x, int y, int flags)
 {
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
+	ScrnInfoPtr pScrn = xf86ScreenToScrn(pScreen);
+#else
 	ScrnInfoPtr pScrn = xf86Screens[scrnIndex];
+#endif
+
 	MaliHWPtr fPtr = MALIHWPTR(pScrn);
 
 	TRACE_ENTER();
@@ -608,7 +627,11 @@ void MaliHWAdjustFrame(int scrnIndex, int x, int y, int flags)
 
 Bool MaliHWEnterVT(int scrnIndex, int flags)
 {
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
+	ScrnInfoPtr pScrn = xf86ScreenToScrn(pScreen);
+#else
 	ScrnInfoPtr pScrn = xf86Screens[scrnIndex];
+#endif
 
 	TRACE_ENTER();
 	IGNORE(flags);
@@ -621,7 +644,11 @@ Bool MaliHWEnterVT(int scrnIndex, int flags)
 
 void MaliHWLeaveVT(int scrnIndex, int flags)
 {
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
+	ScrnInfoPtr pScrn = xf86ScreenToScrn(pScreen);
+#else
 	ScrnInfoPtr pScrn = xf86Screens[scrnIndex];
+#endif
 
 	TRACE_ENTER();
 	IGNORE(flags);
@@ -1053,11 +1080,17 @@ static Bool MaliPreInit(ScrnInfoPtr pScrn, int flags)
 
 	return TRUE;
 }
-
-
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
+static Bool MaliScreenInit(ScreenPtr pScreen, int argc, char **argv)
+#else
 static Bool MaliScreenInit(int scrnIndex, ScreenPtr pScreen, int argc, char **argv)
+#endif
 {
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
+	ScrnInfoPtr pScrn = xf86ScreenToScrn(pScreen);
+#else
 	ScrnInfoPtr pScrn = xf86Screens[pScreen->myNum];
+#endif
 	MaliPtr fPtr = MALIPTR(pScrn);
 	VisualPtr visual;
 	int init_picture = 0;
@@ -1083,12 +1116,20 @@ static Bool MaliScreenInit(int scrnIndex, ScreenPtr pScreen, int argc, char **ar
 			fPtr->dri_render = DRI_2;
 			fPtr->dri_open = TRUE;
 		}
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
+		else xf86DrvMsg(pScrn->scrnIndex,X_ERROR,"DRI2 initialization failed\n");
+#else
 		else xf86DrvMsg(scrnIndex,X_ERROR,"DRI2 initialization failed\n");
+#endif
 	}
 
 	if (NULL == (fPtr->fbmem = MaliHWMapVidmem(pScrn))) 
 	{
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
+		xf86DrvMsg(pScrn->scrnIndex,X_ERROR,"mapping of video memory failed\n");
+#else
 		xf86DrvMsg(scrnIndex,X_ERROR,"mapping of video memory failed\n");
+#endif
 		return FALSE;
 	}
 	fPtr->fboff = MaliHWLinearOffset(pScrn);
@@ -1097,11 +1138,19 @@ static Bool MaliScreenInit(int scrnIndex, ScreenPtr pScreen, int argc, char **ar
 
 	if (!MaliHWModeInit(pScrn, pScrn->currentMode))
 	{
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
+		xf86DrvMsg(pScrn->scrnIndex,X_ERROR,"mode initialization failed\n");
+#else
 		xf86DrvMsg(scrnIndex,X_ERROR,"mode initialization failed\n");
+#endif
 		return FALSE;
 	}
 	MaliHWSaveScreen(pScreen, SCREEN_SAVER_ON);
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
+	MaliHWAdjustFrame(pScrn->scrnIndex,0,0,0);
+#else
 	MaliHWAdjustFrame(scrnIndex,0,0,0);
+#endif
 
 	/* mi layer */
 	miClearVisualTypes();
@@ -1109,7 +1158,11 @@ static Bool MaliScreenInit(int scrnIndex, ScreenPtr pScreen, int argc, char **ar
 	{
 		if (!miSetVisualTypes(pScrn->depth, TrueColorMask, pScrn->rgbBits, TrueColor)) 
 		{
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
+			xf86DrvMsg(pScrn->scrnIndex,X_ERROR,"visual type setup failed for %d bits per pixel [1]\n", pScrn->bitsPerPixel);
+#else
 			xf86DrvMsg(scrnIndex,X_ERROR,"visual type setup failed for %d bits per pixel [1]\n", pScrn->bitsPerPixel);
+#endif
 			return FALSE;
 		}
 	} 
@@ -1117,13 +1170,21 @@ static Bool MaliScreenInit(int scrnIndex, ScreenPtr pScreen, int argc, char **ar
 	{
 		if (!miSetVisualTypes(pScrn->depth, miGetDefaultVisualMask(pScrn->depth), pScrn->rgbBits, pScrn->defaultVisual)) 
 		{
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
+			xf86DrvMsg(pScrn->scrnIndex,X_ERROR,"visual type setup failed for %d bits per pixel [2]\n", pScrn->bitsPerPixel);
+#else
 			xf86DrvMsg(scrnIndex,X_ERROR,"visual type setup failed for %d bits per pixel [2]\n", pScrn->bitsPerPixel);
+#endif
 			return FALSE;
 		}
 	}
 	if (!miSetPixmapDepths()) 
 	{
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
+		xf86DrvMsg(pScrn->scrnIndex,X_ERROR,"pixmap depth setup failed\n");
+#else
 		xf86DrvMsg(scrnIndex,X_ERROR,"pixmap depth setup failed\n");
+#endif
 		return FALSE;
 	}
 
@@ -1191,8 +1252,11 @@ static Bool MaliScreenInit(int scrnIndex, ScreenPtr pScreen, int argc, char **ar
 
 	if (!miCreateDefColormap(pScreen)) 
 	{
-		xf86DrvMsg(scrnIndex, X_ERROR,
-											"internal error: miCreateDefColormap failed in FBDevScreenInit()\n");
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
+		xf86DrvMsg(scrnIndex, X_ERROR,"internal error: miCreateDefColormap failed in FBDevScreenInit()\n");
+#else
+		xf86DrvMsg(pScrn->scrnIndex, X_ERROR,"internal error: miCreateDefColormap failed in FBDevScreenInit()\n");
+#endif
 		return FALSE;
 	}
 
@@ -1233,7 +1297,11 @@ static Bool MaliScreenInit(int scrnIndex, ScreenPtr pScreen, int argc, char **ar
 
 static Bool MaliCloseScreen(int scrnIndex, ScreenPtr pScreen)
 {
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
+	ScrnInfoPtr pScrn = xf86ScreenToScrn(pScreen);
+#else
 	ScrnInfoPtr pScrn = xf86Screens[scrnIndex];
+#endif
 	MaliPtr fPtr = MALIPTR(pScrn);
 
 	TRACE_ENTER();
@@ -1244,8 +1312,11 @@ static Bool MaliCloseScreen(int scrnIndex, ScreenPtr pScreen)
 
 	pScreen->CreateScreenResources = fPtr->CreateScreenResources;
 	pScreen->CloseScreen = fPtr->CloseScreen;
-
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
 	(*pScreen->CloseScreen)(pScreen);
+#else
+	(*pScreen->CloseScreen)(scrnIndex, pScreen);
+#endif
 
 	if ( fPtr->dri_open && fPtr->dri_render == DRI_2 )
 	{
