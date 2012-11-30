@@ -23,7 +23,6 @@
 #ifndef _MALI_FBDEV_DRIVER_H_
 #define _MALI_FBDEV_DRIVER_H_
 
-//#include <linux/videodev2.h>
 #include <linux/fb.h>
 #include "mali_def.h"
 

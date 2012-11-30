@@ -77,7 +77,7 @@ static DRI2Buffer2Ptr MaliDRI2CreateBuffer( DrawablePtr pDraw, unsigned int atta
 	if ( NULL == buffer ) return NULL;
 
 	privates = calloc(1, sizeof *privates);
-	if ( NULL == privates ) 
+	if ( NULL == privates )
 	{
 		free( buffer );
 		return NULL;
@@ -231,7 +231,7 @@ PixmapPtr dri2_get_drawable_pixmap( DrawablePtr pDraw )
 	if ( DRAWABLE_WINDOW == pDraw->type )
 	{
 		pix = pDraw->pScreen->GetWindowPixmap( (WindowPtr)pDraw );
-	} 
+	}
 	else
 	{
 		pix = (PixmapPtr)pDraw;
@@ -270,11 +270,11 @@ static int exchange_buffers(DrawablePtr pDraw, DRI2BufferPtr front, DRI2BufferPt
 	 */
 	both_framebuffer = (front_privPixmap_wrapper->priv->isFrameBuffer && back_privPixmap_wrapper->priv->isFrameBuffer);
 	one_framebuffer = (front_privPixmap_wrapper->priv->isFrameBuffer || back_privPixmap_wrapper->priv->isFrameBuffer);
-	
+
 	if ( both_framebuffer ) exchange_mem_info = FALSE;
 	else if ( !one_framebuffer && dri2_complete_cmd == DRI2_EXCHANGE_COMPLETE ) exchange_mem_info = TRUE;
 
-	if ( exchange_mem_info ) 
+	if ( exchange_mem_info )
 	{
 	//	ErrorF("EXCHANGING UMP ID 0x%x with 0x%x (%s)\n", ump_secure_id_get(front_privPixmap_wrapper->priv->mem_info->handle), ump_secure_id_get(back_privPixmap_wrapper->priv->mem_info->handle), dri2_complete_cmd == DRI2_EXCHANGE_COMPLETE ? "SWAP" : "FLIP" );
 		exchange( front_privPixmap_wrapper->priv->mem_info, back_privPixmap_wrapper->priv->mem_info );
@@ -287,23 +287,29 @@ static int exchange_buffers(DrawablePtr pDraw, DRI2BufferPtr front, DRI2BufferPt
 
 static void platform_wait_for_vsync(ScrnInfoPtr pScrn, int fb_lcd_fd)
 {
-#if PLATFORM_ORION
+#if PLATFORM_SUNXI
+
+#if 0
 	int interrupt = 1;
 	if ( ioctl( fb_lcd_fd, S3CFB_SET_VSYNC_INT, &interrupt ) < 0 )
 	{
 		xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "[%s:%d] failed in S3CFB_SET_VSYNC_INT\n", __FUNCTION__, __LINE__ );
 	}
+#endif
 
 	if ( ioctl( fb_lcd_fd, FBIO_WAITFORVSYNC, 0 ) < 0 )
 	{
 		xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "[%s:%d] failed in FBIO_WAITFORVSYNC\n", __FUNCTION__, __LINE__ );
 	}
 
+#if 0
 	interrupt = 0;
 	if ( ioctl( fb_lcd_fd, S3CFB_SET_VSYNC_INT, &interrupt ) < 0 )
 	{
 		xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "[%s:%d] failed in S3CFB_SET_VSYNC_INT\n", __FUNCTION__, __LINE__ );
 	}
+#endif
+
 #endif
 }
 
@@ -338,7 +344,7 @@ static void MaliDRI2CopyRegion( DrawablePtr pDraw, RegionPtr pRegion, DRI2Buffer
 
 /*
  * MaliDRI2ScheduleSwap is the implementation of DRI2SwapBuffers, this function
- * should wait for vblank event which will trigger registered event handler. 
+ * should wait for vblank event which will trigger registered event handler.
  * Event handler will do FLIP/SWAP/BLIT according to event type.
  *
  * TODO: current DRM doesn't support vblank well, so this function just do FLIP/
@@ -401,14 +407,14 @@ static int MaliDRI2ScheduleSwap(ClientPtr client, DrawablePtr pDraw, DRI2BufferP
 		/* Update all windows so that their front buffer is now the other half of the fbdev */
 		WalkTree(pScreen, wt_set_window_pixmap, back_pixmap);
 
-		
+
 	}
 	else if(front_pixmap->drawable.width        == back_pixmap->drawable.width   &&
 			front_pixmap->drawable.height       == back_pixmap->drawable.height  &&
-			front_pixmap->drawable.bitsPerPixel == back_pixmap->drawable.bitsPerPixel) 
+			front_pixmap->drawable.bitsPerPixel == back_pixmap->drawable.bitsPerPixel)
 	{
 		PixmapPtr dst_pix = dri2_get_drawable_pixmap( dri2_get_drawable( pDraw, front ) );
-			
+
 		dri2_complete_cmd = DRI2_EXCHANGE_COMPLETE;
 		exchange_buffers(pDraw, front, back, dri2_complete_cmd);
 		//ErrorF("swap................  %i\n");
@@ -417,7 +423,7 @@ static int MaliDRI2ScheduleSwap(ClientPtr client, DrawablePtr pDraw, DRI2BufferP
 		box.x2 = pDraw->width;
 		box.y2 = pDraw->height;
 		REGION_INIT(pScreen, &region, &box, 0);
-		
+
 		/* TODO: not sure if doing the translate is correct for a non-composite scenario */
 		RegionTranslate( &region, dst_pix->screen_x, dst_pix->screen_y );
 
@@ -433,7 +439,7 @@ static int MaliDRI2ScheduleSwap(ClientPtr client, DrawablePtr pDraw, DRI2BufferP
 		box.x2 = pDraw->width;
 		box.y2 = pDraw->height;
 		REGION_INIT(pScreen, &region, &box, 0);
-		
+
 		MaliDRI2CopyRegion(pDraw, &region, front, back);
 		dri2_complete_cmd = DRI2_BLIT_COMPLETE;
 	}

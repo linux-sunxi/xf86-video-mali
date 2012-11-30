@@ -6,6 +6,7 @@
 # copies and copies may only be made to the extent permitted
 # by a licensing agreement from ARM Limited.
 
+ACLOCAL_AMFLAGS = -I m4
 SUBDIRS = src
 MAINTAINERCLEANFILES = ChangeLog INSTALL
 

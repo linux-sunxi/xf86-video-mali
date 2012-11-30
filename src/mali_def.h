@@ -29,7 +29,7 @@
 
 #define UMP_LOCK_ENABLED 0
 
-#define PLATFORM_ORION   1
+#define PLATFORM_SUNXI   1
 
 #if MALI_DEBUG
 #define TRACE_ENTER()    xf86DrvMsg(pScrn->scrnIndex, X_INFO, "%s: ENTER\n", __FUNCTION__)
@@ -47,8 +47,11 @@
 #define GET_UMP_SECURE_ID_BUF1   _IOWR('m', 310, unsigned int)
 #define GET_UMP_SECURE_ID_BUF2   _IOWR('m', 311, unsigned int)
 
+/* TODO: fix this for sunxi */
 #define FBIO_WAITFORVSYNC        _IOW('F', 0x20, __u32)
+#if 0
 #define S3CFB_SET_VSYNC_INT      _IOW('F', 206, unsigned int)
+#endif
 
 #define IGNORE( a )  ( a = a );
 
