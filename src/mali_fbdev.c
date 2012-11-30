@@ -658,7 +658,11 @@ Bool MaliHWEnterVT(int scrnIndex, int flags)
 	IGNORE(flags);
 
 	if (!MaliHWModeInit(pScrn, pScrn->currentMode)) return FALSE;
+#if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
+    MaliHWAdjustFrame(pScrn, pScrn->frameX0, pScrn->frameY0, 0);
+#else
 	MaliHWAdjustFrame(pScrn->scrnIndex, pScrn->frameX0, pScrn->frameY0, 0);
+#endif
 
 	return TRUE;
 }
@@ -1171,7 +1175,7 @@ static Bool MaliScreenInit(int scrnIndex, ScreenPtr pScreen, int argc, char **ar
 	}
 	MaliHWSaveScreen(pScreen, SCREEN_SAVER_ON);
 #if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
-	MaliHWAdjustFrame(pScrn->scrnIndex,0,0,0);
+	MaliHWAdjustFrame(pScreen,0,0,0);
 #else
 	MaliHWAdjustFrame(scrnIndex,0,0,0);
 #endif
@@ -1277,9 +1281,9 @@ static Bool MaliScreenInit(int scrnIndex, ScreenPtr pScreen, int argc, char **ar
 	if (!miCreateDefColormap(pScreen))
 	{
 #if XORG_VERSION_CURRENT > XORG_VERSION_NUMERIC(1,12,99,901,0)
-		xf86DrvMsg(scrnIndex, X_ERROR,"internal error: miCreateDefColormap failed in FBDevScreenInit()\n");
-#else
 		xf86DrvMsg(pScrn->scrnIndex, X_ERROR,"internal error: miCreateDefColormap failed in FBDevScreenInit()\n");
+#else
+		xf86DrvMsg(scrnIndex, X_ERROR,"internal error: miCreateDefColormap failed in FBDevScreenInit()\n");
 #endif
 		return FALSE;
 	}
