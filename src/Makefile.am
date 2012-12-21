@@ -9,7 +9,7 @@
 MALI_DDK="/work/trunk"
 
 mali_drv_la_LTLIBRARIES = mali_drv.la
-mali_drv_la_LDFLAGS = -module -avoid-version -L$(MALI_DDK)/lib -lMali -lUMP -lpthread
+mali_drv_la_LDFLAGS = -module -avoid-version -L$(MALI_DDK)/lib -lpixman-1 -lUMP -lpthread
 mali_drv_ladir = @moduledir@/drivers
 
 AM_CFLAGS = @XORG_CFLAGS@ \
