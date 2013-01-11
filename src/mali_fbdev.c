@@ -89,13 +89,17 @@ typedef enum {
 	OPTION_DRI2,
 	OPTION_DRI2_PAGE_FLIP,
 	OPTION_DRI2_WAIT_VSYNC,
+	OPTION_UMP_CACHED,
+	OPTION_UMP_LOCK,
 } FBDevOpts;
 
 static const OptionInfoRec MaliOptions[] = {
 	{ OPTION_DRI2,             "DRI2",            OPTV_BOOLEAN, {0}, TRUE  },
 	{ OPTION_DRI2_PAGE_FLIP,   "DRI2_PAGE_FLIP",  OPTV_BOOLEAN, {0}, FALSE },
 	{ OPTION_DRI2_WAIT_VSYNC,  "DRI2_WAIT_VSYNC", OPTV_BOOLEAN, {0}, FALSE },
-	{ -1,                      NULL,	             OPTV_NONE,    {0}, FALSE }
+	{ OPTION_UMP_CACHED,       "UMP_CACHED",      OPTV_BOOLEAN, {0}, FALSE },
+	{ OPTION_UMP_LOCK,         "UMP_LOCK",        OPTV_BOOLEAN, {0}, FALSE },
+	{ -1,                      NULL,	          OPTV_NONE,    {0}, FALSE }
 };
 
 #ifdef XFree86LOADER
@@ -238,7 +242,7 @@ static Bool fbdev_crtc_config_resize( ScrnInfoPtr pScrn, int width, int height )
 	pScrn->virtualY = height;
 
 	/* update pitch setting in EXA */
-#if 0
+#if 1
 	PixmapPtr frontPixmap = (*pScrn->pScreen->GetScreenPixmap)(pScrn->pScreen);
 	PixmapPtr backPixmap  = ((PrivPixmap *)exaGetPixmapDriverPrivate(frontPixmap))->other_buffer;
 	
@@ -291,6 +295,26 @@ static void mali_check_dri_options( ScrnInfoPtr pScrn )
 	else
 	{
 		xf86DrvMsg( pScrn->scrnIndex, X_CONFIG, "DRI Fullscreen page flip VSYNC disabled\n");
+	}
+
+	if ( xf86ReturnOptValBool(fPtr->Options, OPTION_UMP_CACHED, FALSE ) )
+	{
+		xf86DrvMsg( pScrn->scrnIndex, X_CONFIG, "Use cached UMP memory\n");
+		fPtr->use_cached_ump = TRUE;
+	}
+	else
+	{
+		xf86DrvMsg( pScrn->scrnIndex, X_CONFIG, "Use uncached UMP memory\n");
+	}
+
+	if ( xf86ReturnOptValBool(fPtr->Options, OPTION_UMP_LOCK, FALSE ) )
+	{
+		xf86DrvMsg( pScrn->scrnIndex, X_CONFIG, "Use umplock across processes\n");
+		fPtr->use_umplock = TRUE;
+	}
+	else
+	{
+		xf86DrvMsg( pScrn->scrnIndex, X_CONFIG, "Don't use umplock across processes\n");
 	}
 
 	if ( pScrn->depth != 16 && pScrn->depth != 24 )
@@ -934,6 +958,8 @@ static Bool MaliPreInit(ScrnInfoPtr pScrn, int flags)
 	fPtr->dri_render = DRI_NONE;
 	fPtr->use_pageflipping = FALSE;
 	fPtr->use_pageflipping_vsync = FALSE;
+	fPtr->use_cached_ump = FALSE;
+	fPtr->use_umplock = FALSE;
 
 	/* open device */
 	if ( !MaliHWInit( pScrn, xf86FindOptionValue( fPtr->pEnt->device->options,"fbdev" ) ) ) return FALSE;
@@ -1223,18 +1249,22 @@ static Bool MaliScreenInit(int scrnIndex, ScreenPtr pScreen, int argc, char **ar
 		if (n) xf86XVScreenInit(pScreen,ptr,n);
 	}
 
-#if UMP_LOCK_ENABLED
-	fPtr->fd_umplock = open("/dev/umplock", O_RDWR);
-	if ( -1 == fPtr->fd_umplock )
+	if ( fPtr->use_umplock )
 	{
-		xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "Failed to open umplock device!\n" );
-		fPtr->fd_umplock = 0;
+		fPtr->fd_umplock = open("/dev/umplock", O_RDWR);
+		if ( -1 == fPtr->fd_umplock )
+		{
+			xf86DrvMsg( pScrn->scrnIndex, X_WARNING, "Failed to open umplock device!\n" );
+		}
+		else
+		{
+			xf86DrvMsg( pScrn->scrnIndex, X_INFO, "Opened umplock device successfully!\n" );
+		}
 	}
 	else
 	{
-		xf86DrvMsg( pScrn->scrnIndex, X_INFO, "Opened umplock device!\n" );
+		fPtr->fd_umplock = -1;
 	}
-#endif /* UMP_LOCK_ENABLED */
 
 	return TRUE;
 }
@@ -1261,13 +1291,12 @@ static Bool MaliCloseScreen(int scrnIndex, ScreenPtr pScreen)
 		MaliDRI2CloseScreen( pScreen );
 		mali_drm_close_master( pScrn );
 	}
-#if UMP_LOCK_ENABLED
-	if ( fPtr->fd_umplock )
+
+	if ( fPtr->fd_umplock > 0 )
 	{
 		close( fPtr->fd_umplock );
-		fPtr->fd_umplock = 0;
+		fPtr->fd_umplock = -1;
 	}
-#endif /* UMP_LOCK_ENABLED */
 
 	return TRUE;
 }

@@ -52,6 +52,32 @@ typedef struct
 	Bool has_bb_reference;
 } MaliDRI2BufferPrivateRec, *MaliDRI2BufferPrivatePtr;
 
+static Bool can_flip(DrawablePtr pDraw)
+{
+    ScreenPtr pScreen = pDraw->pScreen;
+    WindowPtr pWin, pRoot;
+    PixmapPtr pWinPixmap, pRootPixmap;
+
+    pRoot = pScreen->root;
+    pRootPixmap = pScreen->GetWindowPixmap(pRoot);
+
+    pWin = (WindowPtr) pDraw;
+    pWinPixmap = pScreen->GetWindowPixmap(pWin);
+    if (pRootPixmap != pWinPixmap)
+        return FALSE;
+
+    /* Does the window match the pixmap exactly? */
+    if (pDraw->x != 0 || pDraw->y != 0 ||
+#ifdef COMPOSITE
+        pDraw->x != pWinPixmap->screen_x || pDraw->y != pWinPixmap->screen_y ||
+#endif
+        pDraw->width != pWinPixmap->drawable.width ||
+        pDraw->height != pWinPixmap->drawable.height)
+        return FALSE;
+
+    return TRUE;
+}
+
 static DRI2Buffer2Ptr MaliDRI2CreateBuffer( DrawablePtr pDraw, unsigned int attachment, unsigned int format )
 {
 	ScreenPtr pScreen = pDraw->pScreen;
@@ -94,7 +120,7 @@ static DRI2Buffer2Ptr MaliDRI2CreateBuffer( DrawablePtr pDraw, unsigned int atta
 	buffer->format = format;
 	buffer->flags = 0;
 
-	if ( DRI2CanFlip( pDraw ) && fPtr->use_pageflipping && DRAWABLE_WINDOW == pDraw->type )
+	if ( can_flip(pDraw) && fPtr->use_pageflipping && DRAWABLE_WINDOW == pDraw->type )
 	{
 		assert(privWindowPixmap->other_buffer != NULL);
 
@@ -372,7 +398,7 @@ static int MaliDRI2ScheduleSwap(ClientPtr client, DrawablePtr pDraw, DRI2BufferP
 
 		unsigned int line_length = fPtr->fb_lcd_var.xres * fPtr->fb_lcd_var.bits_per_pixel / 8;
 		fPtr->fb_lcd_var.yoffset = back_pixmap_priv->mem_info->offset / line_length;
-		//ErrorF("flip................ ofs %i\n", fPtr->fb_lcd_var.yoffset);
+		//ErrorF("flip................ ofs %d\n", fPtr->fb_lcd_var.yoffset);
 
 		if ( ioctl( fPtr->fb_lcd_fd, FBIOPAN_DISPLAY, &fPtr->fb_lcd_var ) == -1 )
 		{
@@ -411,7 +437,7 @@ static int MaliDRI2ScheduleSwap(ClientPtr client, DrawablePtr pDraw, DRI2BufferP
 			
 		dri2_complete_cmd = DRI2_EXCHANGE_COMPLETE;
 		exchange_buffers(pDraw, front, back, dri2_complete_cmd);
-		//ErrorF("swap................  %i\n");
+		//ErrorF("swap................ \n");
 		box.x1 = 0;
 		box.y1 = 0;
 		box.x2 = pDraw->width;

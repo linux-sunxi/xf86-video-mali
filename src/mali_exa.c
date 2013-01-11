@@ -111,9 +111,6 @@ static void* maliCreatePixmap(ScreenPtr pScreen, int size, int align )
 	privPixmap->isFrameBuffer  = FALSE;
 	privPixmap->bits_per_pixel = 0;
 	privPixmap->other_buffer   = NULL;
-#if UMP_LOCK_ENABLED
-	privPixmap->fd_umplock     = fPtr->fd_umplock;
-#endif
 
 	return privPixmap;
 }
@@ -294,11 +291,10 @@ static Bool maliModifyPixmapHeader(PixmapPtr pPixmap, int width, int height, int
 		}
 	}
 
-#if UMP_LOCK_ENABLED
-	mem_info->handle = ump_ref_drv_allocate( size, UMP_REF_DRV_CONSTRAINT_PHYSICALLY_LINEAR | UMP_REF_DRV_CONSTRAINT_USE_CACHE );
-#else
-	mem_info->handle = ump_ref_drv_allocate( size, UMP_REF_DRV_CONSTRAINT_PHYSICALLY_LINEAR);
-#endif
+	if ( fPtr->use_cached_ump )
+		mem_info->handle = ump_ref_drv_allocate( size, UMP_REF_DRV_CONSTRAINT_PHYSICALLY_LINEAR | UMP_REF_DRV_CONSTRAINT_USE_CACHE );
+	else
+		mem_info->handle = ump_ref_drv_allocate( size, UMP_REF_DRV_CONSTRAINT_PHYSICALLY_LINEAR);
 
 	if ( UMP_INVALID_MEMORY_HANDLE == mem_info->handle )
 	{
@@ -380,7 +376,6 @@ static Bool maliPrepareAccess(PixmapPtr pPix, int index)
 
 	privPixmap->refs++;
 
-#if UMP_LOCK_ENABLED
 	if ( !privPixmap->isFrameBuffer )
 	{
 		int secure_id = 0;
@@ -391,14 +386,15 @@ static Bool maliPrepareAccess(PixmapPtr pPix, int index)
 		{
 			item.secure_id = secure_id;
 			item.usage = _LOCK_ACCESS_CPU_WRITE;
-			if ( privPixmap->fd_umplock )
+
+			if ( fPtr->fd_umplock > 0 )
 			{
-				ioctl( privPixmap->fd_umplock, LOCK_IOCTL_CREATE, &item );
-				if ( ioctl( privPixmap->fd_umplock, LOCK_IOCTL_PROCESS, &item ) < 0 )
+				ioctl( fPtr->fd_umplock, LOCK_IOCTL_CREATE, &item );
+				if ( ioctl( fPtr->fd_umplock, LOCK_IOCTL_PROCESS, &item ) < 0 )
 				{
 					int max_retries = 5;
 					ErrorF("Unable to process lock item with ID 0x%x - throttling\n", item.secure_id);
-					while ( (ioctl( privPixmap->fd_umplock, LOCK_IOCTL_PROCESS, &item ) < 0) && max_retries )
+					while ( (ioctl( fPtr->fd_umplock, LOCK_IOCTL_PROCESS, &item ) < 0) && max_retries )
 					{
 						usleep(2000);
 						max_retries--;
@@ -406,12 +402,15 @@ static Bool maliPrepareAccess(PixmapPtr pPix, int index)
 					if ( max_retries == 0 ) ErrorF( "Warning: Max retries == 0\n" );
 				}
 			}
-			ump_cache_operations_control( UMP_CACHE_OP_START );
-			ump_switch_hw_usage_secure_id( item.secure_id, UMP_USED_BY_CPU );
-			ump_cache_operations_control( UMP_CACHE_OP_FINISH );
+
+			if ( fPtr->use_cached_ump )
+			{
+				ump_cache_operations_control( UMP_CACHE_OP_START );
+				ump_switch_hw_usage_secure_id( item.secure_id, UMP_USED_BY_CPU );
+				ump_cache_operations_control( UMP_CACHE_OP_FINISH );
+			}
 		}
 	}
-#endif
 
 	return TRUE;
 }
@@ -420,7 +419,10 @@ static void maliFinishAccess(PixmapPtr pPix, int index)
 {
 	PrivPixmap *privPixmap = (PrivPixmap *)exaGetPixmapDriverPrivate(pPix);
 	mali_mem_info *mem_info;
-
+	ScreenPtr pScreen = pPix->drawable.pScreen;
+	ScrnInfoPtr pScrn = xf86Screens[pScreen->myNum];
+	MaliPtr fPtr = MALIPTR(pScrn);
+	
 	IGNORE( index );
 
 	if ( !privPixmap ) 
@@ -437,21 +439,17 @@ static void maliFinishAccess(PixmapPtr pPix, int index)
 
 	if ( !privPixmap->isFrameBuffer ) 
 	{
-#if UMP_LOCK_ENABLED
 		int secure_id = 0;
 		_lock_item_s item;
 
-		if ( privPixmap->fd_umplock )
+		secure_id = ump_secure_id_get( mem_info->handle );
+		if ( secure_id )
 		{
-			secure_id = ump_secure_id_get( mem_info->handle );
-			if ( secure_id )
-			{
-				item.secure_id = secure_id;
-				item.usage = _LOCK_ACCESS_CPU_WRITE;
-				ioctl( privPixmap->fd_umplock, LOCK_IOCTL_RELEASE, &item );
-			}
+			item.secure_id = secure_id;
+			item.usage = _LOCK_ACCESS_CPU_WRITE;
+			if ( fPtr->fd_umplock > 0 )
+				ioctl( fPtr->fd_umplock, LOCK_IOCTL_RELEASE, &item );
 		}
-#endif
 
 		if ( privPixmap->refs == 1 )
 		{

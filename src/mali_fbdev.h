@@ -50,9 +50,9 @@ typedef struct {
 	char deviceName[64];
 	Bool use_pageflipping;
 	Bool use_pageflipping_vsync;
-#if UMP_LOCK_ENABLED
+	Bool use_cached_ump;
+	Bool use_umplock;
 	int fd_umplock;
-#endif
 } MaliRec, *MaliPtr;
 
 typedef struct {

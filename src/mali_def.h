@@ -27,8 +27,6 @@
 #define MALI_DEBUG  1
 #endif
 
-#define UMP_LOCK_ENABLED 0
-
 #define PLATFORM_ORION   1
 
 #if MALI_DEBUG
@@ -43,9 +41,8 @@
 #define ERROR_STR(str)
 #endif
 
-#define GET_UMP_SECURE_ID        _IOWR('m', 310, unsigned int)
-#define GET_UMP_SECURE_ID_BUF1   _IOWR('m', 310, unsigned int)
-#define GET_UMP_SECURE_ID_BUF2   _IOWR('m', 311, unsigned int)
+#define GET_UMP_SECURE_ID_BUF1   _IOWR('m', 311, unsigned int)
+#define GET_UMP_SECURE_ID_BUF2   _IOWR('m', 312, unsigned int)
 
 #define FBIO_WAITFORVSYNC        _IOW('F', 0x20, __u32)
 #define S3CFB_SET_VSYNC_INT      _IOW('F', 206, unsigned int)

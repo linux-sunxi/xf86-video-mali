@@ -43,9 +43,6 @@ typedef struct
 	Bool isFrameBuffer;
 	int refs;
 	int bits_per_pixel;
-#if UMP_LOCK_ENABLED
-	int fd_umplock;
-#endif
 	unsigned long addr;
 	mali_mem_info *mem_info;
 	PixmapPtr other_buffer;
