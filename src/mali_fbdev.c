@@ -1170,7 +1170,8 @@ static Bool MaliScreenInit(SCREEN_INIT_ARGS_DECL)
 		fPtr->exa = NULL;
 	}
 
-	miInitializeBackingStore(pScreen);
+	/* Removed deprecated function */
+	//miInitializeBackingStore(pScreen);
 	xf86SetBackingStore(pScreen);
 	xf86SetSilkenMouse(pScreen);
 
